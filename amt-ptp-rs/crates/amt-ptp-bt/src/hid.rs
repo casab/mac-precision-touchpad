@@ -168,18 +168,18 @@ pub unsafe extern "C" fn evt_vhf_set_feature(
 
 /// VHF callback when ready for the next input report.
 ///
-/// Called by VHF when it has submitted the previous report and is ready
-/// for more data. Phase 8 will use this to gate report submission from
-/// the BT transport read completion callback.
+/// Called by VHF when it has consumed the previous report and is ready
+/// for more data. Sets the `vhf_ready` flag so the BT read completion
+/// callback knows it can submit the next report.
 ///
 /// # Safety
 ///
-/// Called by VHF with valid client context.
+/// Called by VHF with valid client context pointing to [`DeviceContext`].
 pub unsafe extern "C" fn evt_vhf_ready_for_next_read_report(
-    _vhf_client_context: PVOID,
+    vhf_client_context: PVOID,
 ) {
-    // Phase 8: set a flag or signal the read completion callback
-    // that VHF is ready for the next report.
+    let ctx = unsafe { &mut *(vhf_client_context as *mut DeviceContext) };
+    ctx.vhf_ready = true;
 }
 
 /// VHF cleanup callback.

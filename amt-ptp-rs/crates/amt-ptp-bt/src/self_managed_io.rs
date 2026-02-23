@@ -23,6 +23,7 @@ use amt_ptp_core::hid::build_report_descriptor;
 
 use crate::device::get_device_context;
 use crate::hid;
+use crate::transport;
 use crate::vhf_device;
 
 /// EvtDeviceSelfManagedIoInit — called once at first D0 entry.
@@ -31,11 +32,13 @@ use crate::vhf_device;
 /// and registers VHF callbacks for feature reports.
 ///
 /// ## Flow
-/// 1. Look up device config (MT2 hardcoded for Phase 7)
-/// 2. Build HID report descriptor from device config
-/// 3. Configure VHF with callbacks and device identity
-/// 4. Create and start the VHF device
-/// 5. Record initial timestamp for scan time calculation
+/// 1. Initialize BT HID transport (I/O target + lookaside list)
+/// 2. Query VID/PID from the underlying BT HID device
+/// 3. Look up device config and build HID report descriptor
+/// 4. Configure VHF with callbacks and device identity
+/// 5. Create and start the VHF device
+/// 6. Activate multitouch mode on the trackpad (report 0xF1)
+/// 7. Issue first read request to start receiving touch data
 ///
 /// # Safety
 ///
@@ -44,15 +47,28 @@ use crate::vhf_device;
 pub unsafe extern "C" fn evt_self_managed_io_init(device: WDFDEVICE) -> NTSTATUS {
     let ctx = unsafe { &mut *get_device_context(device) };
 
-    println!("SelfManagedIoInit: creating VHF virtual PTP device");
+    println!("SelfManagedIoInit: initializing BT transport and VHF device");
 
-    // Phase 7: Use hardcoded MT2 config (the INX only matches MT2).
-    // Phase 8 will query VID/PID from the underlying HID device via I/O target.
-    let config = lookup_config(PID_MAGIC_TRACKPAD2);
+    // Initialize HID transport (I/O target + lookaside list)
+    let status = unsafe { transport::init_transport(device) };
+    if !NT_SUCCESS(status) {
+        println!("SelfManagedIoInit: init_transport failed: {status:#x}");
+        return status;
+    }
+
+    // Query VID/PID from the underlying BT HID device
+    let status = unsafe { transport::query_device_attributes(ctx) };
+    if !NT_SUCCESS(status) {
+        println!("SelfManagedIoInit: query_device_attributes failed: {status:#x}");
+        // Fall back to hardcoded MT2 values
+        ctx.vendor_id = BT_VENDOR_ID_APPLE;
+        ctx.product_id = PID_MAGIC_TRACKPAD2;
+        ctx.version_number = DEVICE_VERSION as u16;
+    }
+
+    // Look up device config by product ID
+    let config = lookup_config(ctx.product_id);
     ctx.device_info = Some(config);
-    ctx.product_id = PID_MAGIC_TRACKPAD2;
-    ctx.vendor_id = BT_VENDOR_ID_APPLE;
-    ctx.version_number = DEVICE_VERSION as u16;
 
     // Build the HID report descriptor for this device
     let report_desc = build_report_descriptor(
@@ -115,7 +131,23 @@ pub unsafe extern "C" fn evt_self_managed_io_init(device: WDFDEVICE) -> NTSTATUS
     ctx.perf_freq = unsafe { *freq.QuadPart() };
     ctx.last_report_time = unsafe { *counter.QuadPart() };
 
+    // Activate multitouch mode on the BT trackpad (report 0xF1)
+    let status = unsafe { transport::activate_multitouch(ctx) };
+    if !NT_SUCCESS(status) {
+        // Non-fatal: the device may not be ready yet. Phase 9 recovery
+        // timer will retry. Continue with device setup.
+        println!("SelfManagedIoInit: multitouch activation failed: {status:#x} (will retry)");
+    }
+
     ctx.device_configured = true;
+    ctx.vhf_ready = true;
+
+    // Issue the first read request to start receiving touch data
+    let status = unsafe { transport::issue_read_request(device) };
+    if !NT_SUCCESS(status) {
+        println!("SelfManagedIoInit: first read request failed: {status:#x}");
+        // Non-fatal: Phase 9 recovery will handle this
+    }
 
     println!(
         "SelfManagedIoInit: VHF virtual PTP device created (PID={:#06x})",
@@ -126,8 +158,8 @@ pub unsafe extern "C" fn evt_self_managed_io_init(device: WDFDEVICE) -> NTSTATUS
 
 /// EvtDeviceSelfManagedIoRestart — called on subsequent D0 entries (after suspend).
 ///
-/// Re-records the timestamp for scan time calculation and restores device state.
-/// Phase 8 will also re-configure multitouch on the underlying BT device here.
+/// Re-records the timestamp, restarts the I/O target, re-activates multitouch
+/// mode on the BT trackpad, and reissues read requests.
 ///
 /// # Safety
 ///
@@ -141,19 +173,40 @@ pub unsafe extern "C" fn evt_self_managed_io_restart(device: WDFDEVICE) -> NTSTA
     ctx.perf_freq = unsafe { *freq.QuadPart() };
     ctx.last_report_time = unsafe { *counter.QuadPart() };
 
-    // Phase 8: re-send multitouch activation command (0xF1) to the
-    // underlying BT HID device, since power-down may have reset it.
+    // Restart the I/O target (stopped during suspend)
+    if !ctx.hid_io_target.is_null() {
+        unsafe {
+            call_unsafe_wdf_function_binding!(
+                WdfIoTargetStart,
+                ctx.hid_io_target
+            );
+        }
+    }
+
+    // Re-activate multitouch mode (power-down may have reset the trackpad)
+    let status = unsafe { transport::activate_multitouch(ctx) };
+    if !NT_SUCCESS(status) {
+        println!("SelfManagedIoRestart: multitouch activation failed: {status:#x}");
+        // Non-fatal: Phase 9 recovery timer will retry
+    }
 
     ctx.device_configured = true;
-    println!("SelfManagedIoRestart: device reconfigured");
+    ctx.vhf_ready = true;
 
+    // Reissue read request to resume data flow
+    let status = unsafe { transport::issue_read_request(device) };
+    if !NT_SUCCESS(status) {
+        println!("SelfManagedIoRestart: read request failed: {status:#x}");
+    }
+
+    println!("SelfManagedIoRestart: device reconfigured");
     STATUS_SUCCESS
 }
 
 /// EvtDeviceSelfManagedIoSuspend — called before leaving D0 (power-down).
 ///
-/// Marks the device as not configured. Phase 8 will also stop pending
-/// read requests here.
+/// Marks the device as not configured and stops the I/O target to cancel
+/// all pending BT transport read requests.
 ///
 /// # Safety
 ///
@@ -161,9 +214,20 @@ pub unsafe extern "C" fn evt_self_managed_io_restart(device: WDFDEVICE) -> NTSTA
 pub unsafe extern "C" fn evt_self_managed_io_suspend(device: WDFDEVICE) -> NTSTATUS {
     let ctx = unsafe { &mut *get_device_context(device) };
 
+    // Mark device as not configured first to prevent read resubmission
     ctx.device_configured = false;
 
-    // Phase 8: cancel pending read requests from the BT transport
+    // Cancel pending read requests by stopping the I/O target.
+    // WdfIoTargetStop with WdfIoTargetCancelSentIo cancels all outstanding requests.
+    if !ctx.hid_io_target.is_null() {
+        unsafe {
+            call_unsafe_wdf_function_binding!(
+                WdfIoTargetStop,
+                ctx.hid_io_target,
+                WDF_IO_TARGET_SENT_IO_ACTION::WdfIoTargetCancelSentIo
+            );
+        }
+    }
 
     STATUS_SUCCESS
 }

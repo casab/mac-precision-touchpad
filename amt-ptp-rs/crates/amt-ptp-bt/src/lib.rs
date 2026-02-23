@@ -50,7 +50,9 @@ static GLOBAL_ALLOCATOR: WdkAllocator = WdkAllocator;
 
 mod device;
 mod hid;
+mod input;
 mod self_managed_io;
+mod transport;
 mod vhf_device;
 
 use device::{get_device_context, DEVICE_CONTEXT_TYPE_INFO};

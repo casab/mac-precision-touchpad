@@ -5,7 +5,7 @@
 //! equivalent of the USB driver's `device.rs`.
 //!
 //! Key difference from USB: no USB handles or Wellspring mode. Instead,
-//! a VHF handle creates a virtual PTP device, and an I/O target (Phase 8)
+//! a VHF handle creates a virtual PTP device, and an I/O target
 //! communicates with the underlying BT HID device.
 
 use core::ffi::c_void;
@@ -60,7 +60,12 @@ pub struct DeviceContext {
     /// Performance counter value at the last report, for scan time calculation.
     pub last_report_time: i64,
 
-    // ── HID Transport (Phase 8) ─────────────────────────────────
+    // ── VHF Report Gating ──────────────────────────────────────
+    /// Whether VHF is ready to accept the next input report.
+    /// Set to `true` by `EvtVhfReadyForNextReadReport`, cleared after submission.
+    pub vhf_ready: bool,
+
+    // ── HID Transport ────────────────────────────────────────────
     /// I/O target to the underlying BT HID device.
     pub hid_io_target: WDFIOTARGET,
     /// Lookaside list for read request buffers.
@@ -97,6 +102,7 @@ impl DeviceContext {
         self.ptp_report_button = true; // enabled by default
         self.perf_freq = 0;
         self.last_report_time = 0;
+        self.vhf_ready = true;
         self.hid_io_target = core::ptr::null_mut();
         self.hid_read_buffer_lookaside = core::ptr::null_mut();
         self.recovery_timer = core::ptr::null_mut();
