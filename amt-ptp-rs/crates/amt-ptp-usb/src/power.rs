@@ -1,0 +1,106 @@
+//! Power management callbacks (D0Entry / D0Exit).
+//!
+//! Ported from `Device.c` (AmtPtpEvtDeviceD0Entry, AmtPtpEvtDeviceD0Exit).
+
+use wdk::println;
+use wdk_sys::*;
+
+use crate::device::get_device_context;
+use crate::usb::set_wellspring_mode;
+
+/// EvtDeviceD0Entry — called when the device enters the D0 (working) power state.
+///
+/// Enables Wellspring mode and starts the USB continuous reader.
+///
+/// # Safety
+///
+/// Called by WDF with a valid device handle. The device must be fully
+/// initialized (PrepareHardware completed).
+pub unsafe extern "C" fn evt_device_d0_entry(
+    device: WDFDEVICE,
+    _previous_state: WDF_POWER_DEVICE_STATE,
+) -> NTSTATUS {
+    let ctx = unsafe { &mut *get_device_context(device) };
+
+    // Enable Wellspring mode if reporting is requested
+    if ctx.ptp_report_button || ctx.ptp_report_touch {
+        let status = unsafe { set_wellspring_mode(ctx, true) };
+        if !NT_SUCCESS(status) {
+            println!("D0Entry: SetWellspringMode(ON) failed: {status:#x}");
+            return status;
+        }
+    }
+
+    // Record initial timestamp for scan time calculation
+    // SAFETY: KeQueryPerformanceCounter is always safe to call
+    let mut counter: LARGE_INTEGER = unsafe { core::mem::zeroed() };
+    unsafe {
+        counter = KeQueryPerformanceCounter(core::ptr::null_mut());
+    }
+    ctx.last_report_time = unsafe { *counter.QuadPart() };
+
+    // Start the continuous reader on the interrupt pipe
+    let io_target = unsafe {
+        call_unsafe_wdf_function_binding!(
+            WdfUsbTargetPipeGetIoTarget,
+            ctx.interrupt_pipe
+        )
+    };
+    let status = unsafe {
+        call_unsafe_wdf_function_binding!(WdfIoTargetStart, io_target)
+    };
+    if !NT_SUCCESS(status) {
+        println!("D0Entry: WdfIoTargetStart failed: {status:#x}");
+        // Stop the target if it was partially started
+        unsafe {
+            call_unsafe_wdf_function_binding!(
+                WdfIoTargetStop,
+                io_target,
+                WDF_IO_TARGET_SENT_IO_ACTION::WdfIoTargetCancelSentIo
+            );
+        }
+        return status;
+    }
+
+    STATUS_SUCCESS
+}
+
+/// EvtDeviceD0Exit — called when the device leaves the D0 power state.
+///
+/// Stops the continuous reader and disables Wellspring mode.
+///
+/// # Safety
+///
+/// Called by WDF with a valid device handle.
+pub unsafe extern "C" fn evt_device_d0_exit(
+    device: WDFDEVICE,
+    _target_state: WDF_POWER_DEVICE_STATE,
+) -> NTSTATUS {
+    let ctx = unsafe { &mut *get_device_context(device) };
+
+    // Stop the interrupt pipe I/O target
+    if !ctx.interrupt_pipe.is_null() {
+        let io_target = unsafe {
+            call_unsafe_wdf_function_binding!(
+                WdfUsbTargetPipeGetIoTarget,
+                ctx.interrupt_pipe
+            )
+        };
+        unsafe {
+            call_unsafe_wdf_function_binding!(
+                WdfIoTargetStop,
+                io_target,
+                WDF_IO_TARGET_SENT_IO_ACTION::WdfIoTargetCancelSentIo
+            );
+        }
+    }
+
+    // Disable Wellspring mode
+    let status = unsafe { set_wellspring_mode(ctx, false) };
+    if !NT_SUCCESS(status) {
+        println!("D0Exit: SetWellspringMode(OFF) failed: {status:#x}");
+        // Non-fatal — device is powering down anyway
+    }
+
+    STATUS_SUCCESS
+}
