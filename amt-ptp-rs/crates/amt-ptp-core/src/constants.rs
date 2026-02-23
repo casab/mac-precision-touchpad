@@ -1,7 +1,7 @@
 //! Hardware constants for Apple trackpad devices and Windows PTP reports.
 //!
 //! All values are derived from the original C driver headers:
-//! - `AppleDefinition.h` (USB KM / USB UM / SPI KM)
+//! - `AppleDefinition.h` (USB KM / USB UM)
 //! - `HidCommon.h`
 //! - `Hid.h`
 
