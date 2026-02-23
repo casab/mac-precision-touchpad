@@ -1,0 +1,50 @@
+[workspace]
+members = [
+    "crates/amt-ptp-core",
+    "crates/amt-ptp-usb",
+    "crates/amt-ptp-bt",
+    "vhf-sys",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "GPL-2.0"
+repository = "https://github.com/casab/mac-precision-touchpad"
+
+[workspace.metadata.wdk.driver-model]
+driver-type = "KMDF"
+kmdf-version-major = 1
+target-kmdf-version-minor = 33
+
+[workspace.dependencies]
+# WDK crates
+wdk = "0.4.1"
+wdk-sys = "0.5.1"
+wdk-alloc = "0.4.1"
+wdk-panic = "0.4.1"
+wdk-build = "0.5.1"
+
+# Internal crates
+amt-ptp-core = { path = "crates/amt-ptp-core" }
+vhf-sys = { path = "vhf-sys" }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+multiple_unsafe_ops_per_block = "forbid"
+undocumented_unsafe_blocks = "forbid"
+unnecessary_safety_doc = "forbid"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true

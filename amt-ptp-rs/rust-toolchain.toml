@@ -1,0 +1,5 @@
+# Pin to a known-good nightly for reproducible builds.
+# Nightly is required for #![no_std] kernel-mode drivers.
+# Update this date after verifying the build still works.
+[toolchain]
+channel = "nightly-2025-02-10"

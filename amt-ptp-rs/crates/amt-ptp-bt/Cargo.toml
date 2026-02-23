@@ -1,0 +1,33 @@
+[package]
+name = "amt-ptp-bt"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "KMDF Bluetooth HID filter driver with VHF for Apple Magic Trackpad 2/3 — Windows Precision Touchpad"
+
+[package.metadata.wdk.driver-model]
+driver-type = "KMDF"
+kmdf-version-major = 1
+target-kmdf-version-minor = 33
+
+[lib]
+crate-type = ["cdylib"]
+
+[build-dependencies]
+wdk-build = { workspace = true }
+
+[dependencies]
+wdk = { workspace = true }
+wdk-alloc = { workspace = true }
+wdk-panic = { workspace = true }
+wdk-sys = { workspace = true, features = ["hid"] }
+amt-ptp-core = { workspace = true }
+vhf-sys = { workspace = true }
+
+[features]
+default = []
+nightly = ["wdk/nightly", "wdk-sys/nightly"]
+
+[lints]
+workspace = true

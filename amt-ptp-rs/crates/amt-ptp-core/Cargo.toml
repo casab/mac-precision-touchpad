@@ -1,0 +1,19 @@
+[package]
+name = "amt-ptp-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared library for Apple Magic Trackpad PTP driver — device config, finger parsing, PTP report generation"
+
+[lib]
+# Regular rlib — no WDK metadata needed for the shared library.
+# This crate is #![no_std] so it can be linked into kernel-mode drivers,
+# but it can also be tested in user-mode with `cargo test`.
+
+[dependencies]
+
+[dev-dependencies]
+
+[lints]
+workspace = true

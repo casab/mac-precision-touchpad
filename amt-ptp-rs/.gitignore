@@ -1,0 +1,30 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# Cargo lock is checked in for the workspace
+# (driver builds need reproducibility)
+
+# WDK build artifacts
+*.sys
+*.dll
+*.cat
+*.cer
+*.pdb
+*.exp
+
+# Driver package output
+*.inf
+!**/*.inx
+
+# Certificate files
+*.pfx
+*.pvk
+*.spc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
