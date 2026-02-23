@@ -18,7 +18,7 @@ the Virtual HID Framework (VHF) to replace the fragile HIDCLASS detour hack.
 | 4 | USB driver (full HID miniport, 7 modules) | **DONE** | ~1,400 | — | `958b09d` |
 | 4.5 | USB driver code review & bug fixes | **DONE** | — | 33 pass | — |
 | 5 | USB driver on-device testing & packaging | **MANUAL** | — | — | — |
-| 6 | VHF-sys FFI bindings | Pending | — | — | — |
+| 6 | VHF-sys FFI bindings | **DONE** | ~340 | — | — |
 | 7 | BT driver skeleton + VHF | Pending | — | — | — |
 | 8 | BT driver transport & input | Pending | — | — | — |
 | 9 | BT driver testing & recovery | Pending | — | — | — |
@@ -43,7 +43,7 @@ implementation to reduce overhead and deliver larger coherent units:
 Remaining phases:
 - **Phase 4.5** = Code review + bug fixes (scan time, selective reporting, physical max)
 - **Phase 5** = Original Phase 17 (USB build verification + on-device testing) — **MANUAL, non-blocking until Phase 9**
-- **Phase 6** = Original Phase 11 (VHF FFI bindings crate) — **NEXT**
+- **Phase 6** = Original Phase 11 (VHF FFI bindings crate) — **DONE**
 - **Phases 7-9** = Original Phases 18-23 (BT driver)
 - **Phase 10** = Original Phase 24 (MT3, settings app, final packaging)
 
@@ -768,14 +768,24 @@ device-specific quirks discovered during testing.
 
 ---
 
-### Phase 6: VHF-sys FFI Bindings
+### Phase 6: VHF-sys FFI Bindings — **DONE**
 
 **Goal:** Rust FFI bindings for the Virtual HID Framework (`vhf.h`).
 
 **Deliverables:**
-- `vhf-sys/wrapper.h`, `build.rs` (bindgen + link `Vhfkm.lib`)
-- `VHF_CONFIG`, `VHFHANDLE`, `VHFOPERATIONHANDLE`, callback types
-- `VhfCreate`, `VhfStart`, `VhfReadReportSubmit`, `VhfAsyncOperationComplete`, `VhfDelete`
+- `vhf-sys/build.rs` — emits `cargo:rustc-link-lib=Vhfkm` for auto-linking
+- `vhf-sys/src/lib.rs` (~340 lines):
+  - Handle types: `VHFHANDLE`, `VHFOPERATIONHANDLE`
+  - `HID_XFER_PACKET` struct (report data exchange)
+  - Callback type aliases: `EVT_VHF_ASYNC_OPERATION`, `EVT_VHF_READY_FOR_NEXT_READ_REPORT`, `EVT_VHF_CLEANUP`
+  - `VHF_CONFIG` struct (all 19 fields matching `vhf.h`)
+  - `VHF_CONFIG::init()` helper (equivalent to `VHF_CONFIG_INIT` C macro)
+  - `extern "C"` block: `VhfCreate`, `VhfStart`, `VhfReadReportSubmit`, `VhfAsyncOperationComplete`, `VhfDelete`
+  - Pointer type aliases: `PVOID`, `PUCHAR`, `PWSTR`, `PDEVICE_OBJECT`
+  - Re-exports of base WDK types: `NTSTATUS`, `ULONG`, `USHORT`, `BOOLEAN`, `GUID`
+
+**Note:** Cannot compile on Linux (requires WDK/wdk-sys). Syntax verified clean;
+full compilation deferred to Windows build (Phase 5 or Phase 7).
 
 ---
 
