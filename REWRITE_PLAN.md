@@ -8,17 +8,57 @@ the Virtual HID Framework (VHF) to replace the fragile HIDCLASS detour hack.
 
 ---
 
+## Implementation Progress
+
+| Phase | Description | Status | Lines | Tests | Commit |
+|-------|-------------|--------|-------|-------|--------|
+| 1 | Workspace scaffolding | **DONE** | ~200 | — | `e5b622a` |
+| 2 | Build system & INX driver files | **DONE** | ~500 | — | `9772189` |
+| 3 | Core library (device, finger, ptp, hid, error) | **DONE** | ~1,600 | 30 pass | `d2b242c` |
+| 4 | USB driver (full HID miniport, 7 modules) | **DONE** | ~1,400 | — | `958b09d` |
+| 5 | USB driver testing & packaging | Pending | — | — | — |
+| 6 | VHF-sys FFI bindings | Pending | — | — | — |
+| 7 | BT driver skeleton + VHF | Pending | — | — | — |
+| 8 | BT driver transport & input | Pending | — | — | — |
+| 9 | BT driver testing & recovery | Pending | — | — | — |
+| 10 | MT3 support, settings app, packaging | Pending | — | — | — |
+
+### Phase Consolidation Notes
+
+The original 24-phase plan was consolidated into 10 focused phases during
+implementation to reduce overhead and deliver larger coherent units:
+
+- **Phase 1** = Original Phase 1 (workspace scaffolding)
+- **Phase 2** = Original Phase 2 + INX files for both drivers + unified package INX
+- **Phase 3** = Original Phases 3-10 (entire `amt-ptp-core`: device configs for
+  6 devices including MT2 + all T2 variants, TYPE5 + TYPE2-4 finger parsing,
+  coordinate transforms, PTP report structs, HID descriptor builder,
+  feature reports, HQA blob, constants, error types — 30 unit tests passing)
+- **Phase 4** = Original Phases 12-16 (entire USB driver: DriverEntry,
+  EvtDriverDeviceAdd, USB init, Wellspring mode, continuous reader,
+  power management, queue setup, HID IOCTL dispatch, feature report handlers,
+  touch input processing → PTP reports)
+
+Remaining phases:
+- **Phase 5** = Original Phase 17 (USB build verification + on-device testing)
+- **Phase 6** = Original Phase 11 (VHF FFI bindings crate)
+- **Phases 7-9** = Original Phases 18-23 (BT driver)
+- **Phase 10** = Original Phase 24 (MT3, settings app, final packaging)
+
+---
+
 ## 1. Technology Stack
 
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
 | Language | Rust | Safety, modern tooling, user preference |
-| WDF Bindings | `windows-drivers-rs` (`wdk-sys` + `wdk`) | Official Microsoft crate, production-proven on Surface hardware |
+| WDF Bindings | `windows-drivers-rs` (`wdk-sys 0.5.1` + `wdk 0.4.1`) | Official Microsoft crate, production-proven on Surface hardware |
 | Driver Model | KMDF (both drivers) | VHF requires kernel-mode; consistency between USB and BT drivers |
 | BT HID Virtualization | VHF (Virtual HID Framework) | Documented API, replaces fragile HIDCLASS detour hack |
-| Build System | `cargo-wdk` + WDK 22H2 | Standard Rust toolchain with WDK integration |
+| Build System | `cargo-make` + `cargo-wdk` + WDK 22H2 | Standard Rust toolchain with WDK integration |
 | Min Windows Version | Windows 11 22H2 (build 22621) | Exact match with `windows-drivers-rs` default; zero WDK friction |
 | Min WDF Version | KMDF 1.33 | Default for WDK 22H2, no manual `wdk-sys` patching needed |
+| Rust Toolchain | `nightly-2025-02-10` | Pinned for reproducibility; required for `#![no_std]` kernel drivers |
 
 ### Build Prerequisites
 
@@ -26,68 +66,66 @@ the Virtual HID Framework (VHF) to replace the fragile HIDCLASS detour hack.
 - Enterprise WDK (eWDK) 22H2 or newer
 - Visual Studio 2022 with "Desktop development with C++" workload
 - LLVM 17.0.6 (for bindgen)
-- Rust nightly toolchain (required for `#![no_std]` kernel drivers)
+- Rust nightly toolchain pinned to `nightly-2025-02-10`
 - `cargo-wdk` (`cargo install cargo-wdk`)
+- `cargo-make` (`cargo install cargo-make`) — build automation
 
 ---
 
-## 2. Project Structure
+## 2. Project Structure (Implemented)
 
 ```
 amt-ptp-rs/
-├── Cargo.toml                    # Workspace root
-├── README.md
+├── Cargo.toml                    # Workspace root (KMDF 1.33 metadata)
+├── rust-toolchain.toml           # Pinned nightly-2025-02-10
+├── .cargo/config.toml            # +crt-static rustflag for kernel mode
+├── .gitignore
+├── Makefile.toml                 # cargo-make build automation
 ├── crates/
-│   ├── amt-ptp-core/             # Shared library crate
+│   ├── amt-ptp-core/             # Shared #![no_std] library (rlib)
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── lib.rs            # Public API
-│   │       ├── device.rs         # Device config tables (MT2/MT3)
-│   │       ├── finger.rs         # TYPE5 finger parsing + coordinate transform
-│   │       ├── ptp.rs            # PTP report generation (contacts, scan time)
-│   │       ├── hid_descriptor.rs # HID report descriptor builder
-│   │       ├── feature.rs        # Feature report handling (caps, HQA, mode)
-│   │       └── config.rs         # Runtime configuration (sensitivity, thresholds)
+│   │       ├── lib.rs            # Module declarations, extern crate alloc
+│   │       ├── constants.rs      # All hardware constants, report IDs, thresholds
+│   │       ├── device.rs         # DeviceConfig, TrackpadType, CONFIG_TABLE (6 entries)
+│   │       ├── error.rs          # Error enum (BufferTooShort, MalformedPayload, etc.)
+│   │       ├── finger.rs         # TYPE5 + TYPE2-4 finger parsing, coordinate transform
+│   │       ├── hid.rs            # HID report descriptor builder, DEFAULT_HQA_BLOB
+│   │       └── ptp.rs            # PTP report structs (50B input, feature reports)
 │   │
-│   ├── amt-ptp-usb/              # USB KMDF function driver
-│   │   ├── Cargo.toml
-│   │   ├── amt-ptp-usb.inx       # INF template
+│   ├── amt-ptp-usb/              # USB KMDF lower-filter driver (cdylib)
+│   │   ├── Cargo.toml            # wdk-sys features: usb, hid
+│   │   ├── build.rs              # wdk-build configuration
+│   │   ├── amt_ptp_usb.inx       # INF template (14 HW IDs: 13 T2 + MT2)
 │   │   └── src/
-│   │       ├── lib.rs            # DriverEntry, EvtDriverDeviceAdd
-│   │       ├── device.rs         # USB device init, interface selection, Wellspring
-│   │       ├── interrupt.rs      # USB interrupt transfer handling
-│   │       ├── hid.rs            # HID minidriver IOCTL handling
-│   │       └── queue.rs          # WDF queue setup + IOCTL dispatch
+│   │       ├── lib.rs            # DriverEntry → WdfDriverCreate → EvtDriverDeviceAdd
+│   │       ├── device.rs         # DeviceContext struct, WDF context accessor
+│   │       ├── usb.rs            # USB hardware init, pipe selection, Wellspring mode
+│   │       ├── power.rs          # D0Entry (start reader) / D0Exit (stop + disable)
+│   │       ├── queue.rs          # Default parallel queue + manual input queue
+│   │       ├── hid.rs            # HID descriptor, attributes, report desc, features
+│   │       └── input.rs          # Continuous reader → finger parse → PTP → complete
 │   │
-│   ├── amt-ptp-bt/               # Bluetooth KMDF filter driver + VHF
-│   │   ├── Cargo.toml
-│   │   ├── amt-ptp-bt.inx        # INF template
+│   ├── amt-ptp-bt/               # Bluetooth KMDF filter driver + VHF (stub)
+│   │   ├── Cargo.toml            # wdk-sys features: hid
+│   │   ├── build.rs
+│   │   ├── amt_ptp_bt.inx        # BT filter INF (Col01 MT2, null Col02/Col03)
 │   │   └── src/
-│   │       ├── lib.rs            # DriverEntry, EvtDriverDeviceAdd
-│   │       ├── device.rs         # Filter device init, VHF virtual device setup
-│   │       ├── transport.rs      # BT HID transport read/write
-│   │       ├── vhf.rs            # VHF lifecycle (create, start, submit, delete)
-│   │       └── queue.rs          # WDF queue setup
+│   │       └── lib.rs            # Stub DriverEntry
 │   │
-│   └── amt-ptp-settings/         # Settings app (phase 2)
-│       ├── Cargo.toml
-│       └── src/
-│           └── main.rs
+│   └── amt-ptp-settings/         # Settings app (Phase 10)
+│       └── ...
 │
-├── vhf-sys/                      # VHF FFI bindings (standalone crate)
+├── vhf-sys/                      # VHF FFI bindings placeholder
 │   ├── Cargo.toml
-│   ├── build.rs                  # bindgen for vhf.h
-│   ├── src/
-│   │   └── lib.rs                # Raw VHF FFI types + functions
-│   └── wrapper.h                 # #include <vhf.h>
+│   └── src/
+│       └── lib.rs                # Stub
 │
-└── tests/                        # Integration tests (user-mode simulation)
-    ├── finger_parsing_tests.rs
-    ├── ptp_report_tests.rs
-    └── hid_descriptor_tests.rs
+└── pkg/
+    └── AmtPtpDevice.inx          # Unified package INF (both .sys drivers)
 ```
 
-### Workspace Cargo.toml
+### Workspace Cargo.toml (Actual)
 
 ```toml
 [workspace]
@@ -99,338 +137,232 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+edition = "2021"
+license = "GPL-2.0"
+repository = "https://github.com/casab/mac-precision-touchpad"
+
+[workspace.metadata.wdk.driver-model]
+driver-type = "KMDF"
+kmdf-version-major = 1
+target-kmdf-version-minor = 33
+
 [workspace.dependencies]
-wdk = "0.3"
-wdk-sys = "0.3"
-wdk-alloc = "0.3"
-wdk-panic = "0.3"
+wdk = "0.4.1"
+wdk-sys = "0.5.1"
+wdk-alloc = "0.4.1"
+wdk-panic = "0.4.1"
+wdk-build = "0.5.1"
 amt-ptp-core = { path = "crates/amt-ptp-core" }
 vhf-sys = { path = "vhf-sys" }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
 ```
 
 ---
 
-## 3. Crate Design: `amt-ptp-core`
+## 3. Crate Design: `amt-ptp-core` (Implemented)
 
-The shared library containing all transport-independent logic.
+The shared `#![no_std]` library containing all transport-independent logic.
+**30 unit tests passing.** Modules: `constants`, `device`, `error`, `finger`, `hid`, `ptp`.
 
 ### 3.1 Device Configuration (`device.rs`)
 
+Supports 6 device configs: 1 fallback + 4 T2 variants + Magic Trackpad 2.
+Lookup by USB PID with automatic fallback for unknown T2 devices.
+
 ```rust
-#[derive(Clone, Copy)]
-pub struct TrackpadConfig {
-    pub name: &'static str,
-    pub vendor_id_usb: u16,      // 0x05AC
-    pub vendor_id_bt: u16,       // 0x004C
-    pub product_id: u16,         // 0x0265 (MT2), TBD (MT3)
-    pub x_min: i16,
-    pub x_max: i16,
-    pub y_min: i16,
-    pub y_max: i16,
-    pub x_physical_mm: u16,      // 1600 = 160.0mm
-    pub y_physical_mm: u16,      // 1149 = 114.9mm
-    pub max_contacts: u8,        // 5
-    pub finger_size: u8,         // 9 (TYPE5)
-    pub usb_header_size: u8,     // 12
-    pub bt_header_size: u8,      // 4
-    pub button_offset: u8,       // 1
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TrackpadType { Type1, Type2, Type3, Type4, Type5 }
+
+impl TrackpadType {
+    pub const fn header_size_usb(self) -> usize;  // 12 for TYPE5, 46 for TYPE4
+    pub const fn header_size_bt(self) -> usize;   // 4 for TYPE5 BT
+    pub const fn finger_size(self) -> usize;      // 9 for TYPE5, 30 for TYPE4
+    pub const fn finger_delta(self) -> usize;     // Offset from header to first finger
+    pub const fn button_offset(self) -> usize;    // 1 for TYPE5, 31 for TYPE4
+    pub const fn usb_report_size(self) -> usize;  // header + MAX_FINGERS * finger_size
 }
 
-pub static MAGIC_TRACKPAD_2: TrackpadConfig = TrackpadConfig {
-    name: "Magic Trackpad 2",
-    vendor_id_usb: 0x05AC,
-    vendor_id_bt: 0x004C,
-    product_id: 0x0265,
-    x_min: -3678,
-    x_max: 3934,
-    y_min: -2479,
-    y_max: 2586,
-    x_physical_mm: 1600,
-    y_physical_mm: 1149,
-    max_contacts: 5,
-    finger_size: 9,
-    usb_header_size: 12,
-    bt_header_size: 4,
-    button_offset: 1,
-};
+pub struct DeviceConfig {
+    pub product_id: u16,
+    pub caps: u32,
+    pub trackpad_type: TrackpadType,
+    pub wellspring_msg: WellspringMsg,
+    pub pressure: AxisParams,
+    pub width: AxisParams,
+    pub x: AxisParams,              // e.g. MT2: min=-3678, max=3934
+    pub y: AxisParams,              // e.g. MT2: min=-2479, max=2586
+    pub orientation: AxisParams,
+    // ... button_endpoint, button_data_len, trackpad_endpoint
+}
 
-// MT3 config to be filled in after reverse engineering
-pub static MAGIC_TRACKPAD_3: TrackpadConfig = TrackpadConfig {
-    name: "Magic Trackpad 3",
-    // ... TBD, likely same as MT2 with different PID and coordinate ranges
-};
+pub static CONFIG_TABLE: &[DeviceConfig] = &[/* 6 entries */];
+pub fn lookup_config(product_id: u16) -> &'static DeviceConfig;
 ```
 
 ### 3.2 TYPE5 Finger Parsing (`finger.rs`)
 
-Port of the C bit manipulation, with clear documentation of the wire format:
+Supports both TYPE5 (MT2, 9-byte packed) and TYPE2-4 (T2, 28-30 byte le16-aligned).
+Parsed into a common `Finger` struct. Y-axis inversion handled per type.
 
 ```rust
-/// TYPE5 finger data: 9 bytes packed
-/// Byte layout:
-///   [0..1] bits 0-12:  absolute X (13-bit signed)
-///   [0..3] bits 13-31: absolute Y (19-bit region, sign-extended)
-///   [4]    touch major
-///   [5]    touch minor
-///   [6]    size (tool area)
-///   [7]    pressure
-///   [8]    bits 0-3: contact ID, bits 4-7: orientation
-#[repr(C, packed)]
-pub struct Type5Finger {
-    pub data: [u8; 9],
+pub struct Finger {
+    pub raw_x: i32, pub raw_y: i32,
+    pub touch_major: u8, pub touch_minor: u8,
+    pub size: u8, pub pressure: u8,
+    pub contact_id: u8, pub orientation: u8,
 }
 
-impl Type5Finger {
-    pub fn x_raw(&self) -> i16 {
-        let raw = u16::from_le_bytes([self.data[0], self.data[1]]) & 0x1FFF;
-        // Sign-extend 13-bit to 16-bit
-        ((raw << 3) as i16) >> 3
-    }
-
-    pub fn y_raw(&self) -> i16 {
-        let raw = u32::from_le_bytes([self.data[0], self.data[1], self.data[2], self.data[3]]);
-        // Extract Y: shift left 6 to align, arithmetic right shift 19
-        -(((raw << 6) as i32) >> 19) as i16
-    }
-
-    pub fn touch_major(&self) -> u8 { self.data[4] }
-    pub fn touch_minor(&self) -> u8 { self.data[5] }
-    pub fn size(&self) -> u8 { self.data[6] }
-    pub fn pressure(&self) -> u8 { self.data[7] }
-    pub fn contact_id(&self) -> u8 { self.data[8] & 0x0F }
-    pub fn orientation(&self) -> u8 { (self.data[8] >> 4) & 0x0F }
+impl Finger {
+    pub fn transform_to_ptp(&self, config: &DeviceConfig) -> (u16, u16);
+    pub const fn is_tip_switch(&self) -> bool;    // (touch_major << 1) > 0
+    pub const fn is_confident(&self) -> bool;     // (touch_minor << 1) < 345
 }
+
+pub fn parse_type5_finger(data: &[u8; 9]) -> Finger;          // 13-bit signed X/Y
+pub fn parse_legacy_finger(data: &[u8], config: &DeviceConfig) -> Finger;
+pub fn parse_report(report: &[u8], config: &DeviceConfig, header_size: usize,
+                    out: &mut [Finger]) -> Result<(usize, bool), Error>;
 ```
 
-### 3.3 PTP Report Generation (`ptp.rs`)
+### 3.3 PTP Report Types (`ptp.rs`)
+
+All `#[repr(C, packed)]` with verified sizes via unit tests:
+
+| Struct | Size | Report ID |
+|--------|------|-----------|
+| `PtpContact` | 9B | — |
+| `PtpReport` | 50B | 0x05 |
+| `PtpDeviceCapsReport` | 3B | 0x07 |
+| `PtpInputModeReport` | 2B | 0x04 |
+| `PtpSelectiveReportingReport` | 3B | 0x06 |
+| `PtpHqaCertificationReport` | 257B | 0x08 |
+| `PtpUserModeAppConfReport` | 4B | 0x09 |
+
+### 3.4 HID Report Descriptor (`hid.rs`)
+
+Dynamic builder parameterized by device config's coordinate ranges:
 
 ```rust
-/// Windows Precision Touchpad contact
-#[repr(C, packed)]
-pub struct PtpContact {
-    pub flags: u8,          // bit 0: Confidence, bit 1: TipSwitch
-    pub contact_id: u32,
-    pub x: u16,
-    pub y: u16,
-}
-
-/// Full PTP input report
-#[repr(C, packed)]
-pub struct PtpReport {
-    pub report_id: u8,      // 0x05
-    pub contacts: [PtpContact; 5],
-    pub scan_time: u16,     // 100us units, max 0xFFFF (BUG FIX: was 0xFF)
-    pub contact_count: u8,
-    pub is_button_clicked: u8,
-}
-
-/// Transform raw Apple finger data into PTP contacts
-pub fn transform_fingers(
-    raw_data: &[u8],
-    config: &TrackpadConfig,
-    header_size: u8,        // USB vs BT header size
-    report: &mut PtpReport,
-) -> u8 {
-    let finger_data = &raw_data[header_size as usize..];
-    let num_fingers = finger_data.len() / config.finger_size as usize;
-    let count = num_fingers.min(config.max_contacts as usize);
-
-    for i in 0..count {
-        let offset = i * config.finger_size as usize;
-        let finger = Type5Finger { data: finger_data[offset..offset+9].try_into().unwrap() };
-
-        let x_raw = finger.x_raw();
-        let y_raw = finger.y_raw();
-
-        // Translate to PTP coordinate space (0-based, clamped)
-        let x = (x_raw - config.x_min).max(0) as u16;
-        let y = (y_raw - config.y_min).max(0) as u16;
-
-        // BUG FIX: check both touch_major AND touch_minor for confidence
-        let tip_switch = (finger.touch_major() << 1) > 0;
-        let confidence = (finger.touch_minor() << 1) < 345
-                      && (finger.touch_major() << 1) < 345;
-
-        report.contacts[i] = PtpContact {
-            flags: (confidence as u8) | ((tip_switch as u8) << 1),
-            contact_id: finger.contact_id() as u32,
-            x,
-            y,
-        };
-    }
-
-    count as u8
-}
+pub fn build_report_descriptor(
+    x_logical_max: u16, y_logical_max: u16,
+    x_physical_max: u16, y_physical_max: u16,
+) -> alloc::vec::Vec<u8>;
 ```
 
-### 3.4 HID Report Descriptor (`hid_descriptor.rs`)
+Generates 3 top-level collections: Digitizer Touch Pad (5 fingers + scan time +
+contact count + button + device caps + HQA), Configuration (input mode +
+selective reporting), Vendor App Config.
 
-Builder pattern for constructing the PTP HID report descriptor at compile time:
+Also contains `DEFAULT_HQA_BLOB: [u8; 256]` — the PTP certification blob.
 
-```rust
-/// Generate the complete PTP HID report descriptor for a given trackpad config.
-/// This replaces the static byte arrays from the C codebase.
-pub fn build_ptp_descriptor(config: &TrackpadConfig) -> &'static [u8] {
-    // ... builds descriptor with:
-    // - Digitizer/TouchPad usage page (0x0D, usage 0x05)
-    // - 5 finger collections (Confidence, TipSwitch, ContactID, X, Y)
-    // - Scan Time (16-bit, 100us units)
-    // - Contact Count
-    // - Button (1 bit + 7 padding)
-    // - Device Caps feature report (max contacts, button type)
-    // - HQA certification feature report (256 bytes)
-    // - Configuration TLC (input mode, function switch)
-    //
-    // Logical/physical maximums derived from config:
-    //   X logical max = config.x_max - config.x_min
-    //   Y logical max = config.y_max - config.y_min
-    //   X physical max = config.x_physical_mm
-    //   Y physical max = config.y_physical_mm
-}
-```
+### 3.5 Constants (`constants.rs`) & Errors (`error.rs`)
 
-### 3.5 Feature Reports (`feature.rs`)
-
-```rust
-/// PTP Device Capabilities feature report
-#[repr(C, packed)]
-pub struct DeviceCapsReport {
-    pub report_id: u8,          // 0x07
-    pub max_contact_points: u8, // 5
-    pub button_type: u8,        // 0 = clickpad
-}
-
-/// PTP HQA certification report
-#[repr(C, packed)]
-pub struct HqaCertReport {
-    pub report_id: u8,          // 0x08
-    pub blob: [u8; 256],        // Hardcoded certification blob
-}
-
-/// Input mode feature report
-#[repr(C, packed)]
-pub struct InputModeReport {
-    pub report_id: u8,          // 0x04
-    pub mode: u8,               // 0=mouse, 3=PTP
-}
-
-/// Function switch feature report
-#[repr(C, packed)]
-pub struct FunctionSwitchReport {
-    pub report_id: u8,          // 0x06
-    pub switch_state: u8,       // bit 0: button, bit 1: surface
-}
-```
-
-### 3.6 Scan Time (`ptp.rs`)
-
-```rust
-/// BUG FIX: Cap at 0xFFFF (16-bit) instead of original 0xFF (8-bit)
-pub fn calculate_scan_time(
-    current_counter: u64,
-    last_counter: u64,
-    frequency: u64,
-) -> u16 {
-    if frequency == 0 || last_counter == 0 {
-        return 0;
-    }
-    let delta = current_counter.saturating_sub(last_counter);
-    // Convert to 100us units: delta * 10000 / frequency
-    let time_100us = (delta * 10_000) / frequency;
-    time_100us.min(0xFFFF) as u16
-}
-```
+All hardware constants, report IDs, Apple PIDs, thresholds. Error enum with
+`BufferTooShort`, `MalformedPayload`, `FingerIndexOutOfRange` variants.
 
 ---
 
-## 4. USB Driver: `amt-ptp-usb`
+## 4. USB Driver: `amt-ptp-usb` (Implemented)
 
-KMDF function driver for Magic Trackpad 2/3 connected via USB.
+KMDF lower-filter driver beneath `mshidkmdf` for Magic Trackpad 2/3 and T2 trackpads.
+**7 modules, ~1,400 lines.** Full HID miniport implementation.
 
-### 4.1 Driver Lifecycle
+### 4.1 Module Structure
+
+| Module | Lines | Purpose |
+|--------|-------|---------|
+| `lib.rs` | 164 | `DriverEntry` → `WdfDriverCreate` → `EvtDriverDeviceAdd` (filter, PnP/power, queues) |
+| `device.rs` | 114 | `DeviceContext` struct (USB handles, PTP state, timing), WDF context accessor |
+| `usb.rs` | 325 | `prepare_usb_hardware()`, pipe selection, Wellspring mode, continuous reader config |
+| `power.rs` | 106 | `evt_device_d0_entry` (start reader) / `evt_device_d0_exit` (stop + disable) |
+| `queue.rs` | 165 | Default parallel queue (HID IOCTLs) + manual input queue, IOCTL dispatch |
+| `hid.rs` | 393 | HID descriptor, device attributes, report descriptor, GET/SET feature |
+| `input.rs` | 147 | Continuous reader callback → finger parse → PTP report → complete request |
+
+### 4.2 Driver Lifecycle (Actual)
 
 ```
-DriverEntry
-  → EvtDriverDeviceAdd
-    → WdfDeviceCreate (with PnP/Power callbacks)
-    → WdfIoQueueCreate (default queue for HID IOCTLs)
-    → WdfIoQueueCreate (manual queue for pending read requests)
+DriverEntry (lib.rs)
+  → WdfDriverCreate(EvtDriverDeviceAdd)
 
-EvtDevicePrepareHardware
-  → Select USB configuration + interface
-  → Find interrupt IN pipe
-  → Store device config (MT2 or MT3 based on PID)
+EvtDriverDeviceAdd (lib.rs)
+  → WdfFdoInitSetFilter              # lower filter beneath mshidkmdf
+  → WdfDeviceInitSetPnpPowerEventCallbacks(PrepareHardware, D0Entry, D0Exit)
+  → WdfDeviceCreate with DeviceContext
+  → queue_initialize():
+    → Default parallel queue (EvtIoInternalDeviceControl)
+    → Manual input queue (PowerManaged = WdfFalse)
 
-EvtDeviceD0Entry
-  → Enable Wellspring mode (USB control transfer)
-  → Configure continuous reader on interrupt pipe
-  → Start scan time counter
+EvtDevicePrepareHardware (lib.rs → usb.rs)
+  → WdfUsbTargetDeviceCreate
+  → WdfUsbTargetDeviceGetDeviceDescriptor → lookup_config(PID)
+  → WdfUsbTargetDeviceSelectConfig (single interface)
+  → Find interrupt IN pipe → WdfUsbTargetPipeSetNoMaximumPacketSizeCheck
+  → WDF_USB_CONTINUOUS_READER_CONFIG_INIT → WdfUsbTargetPipeConfigContinuousReader
 
-EvtDeviceD0Exit
-  → Disable Wellspring mode
-  → Stop continuous reader
+EvtDeviceD0Entry (power.rs)
+  → set_wellspring_mode(ctx, true)
+  → KeQueryPerformanceCounter → ctx.last_report_time
+  → WdfIoTargetStart(interrupt pipe)
 
-EvtIoInternalDeviceControl
-  → Route HID IOCTLs:
-    IOCTL_HID_GET_DEVICE_DESCRIPTOR      → serve HID_DESCRIPTOR
-    IOCTL_HID_GET_REPORT_DESCRIPTOR      → serve PTP report descriptor
-    IOCTL_HID_GET_DEVICE_ATTRIBUTES      → serve HID_DEVICE_ATTRIBUTES
-    IOCTL_HID_READ_REPORT                → queue in manual queue
-    IOCTL_HID_GET_FEATURE                → serve feature reports
-    IOCTL_HID_SET_FEATURE                → handle input mode, config
-    IOCTL_HID_GET_STRING                  → serve device strings
+EvtDeviceD0Exit (power.rs)
+  → WdfIoTargetStop(WdfIoTargetCancelSentIo)
+  → set_wellspring_mode(ctx, false)
 
-EvtUsbInterruptPipeReadComplete (continuous reader callback)
-  → Parse USB header (12 bytes)
-  → Extract button state from offset 1
-  → Call amt_ptp_core::transform_fingers()
-  → Calculate scan time
-  → Complete pending read request from manual queue
+EvtIoInternalDeviceControl (queue.rs → hid.rs)
+  IOCTL_HID_GET_DEVICE_DESCRIPTOR  → 9-byte HID descriptor
+  IOCTL_HID_GET_DEVICE_ATTRIBUTES  → VID/PID/version from USB descriptor
+  IOCTL_HID_GET_REPORT_DESCRIPTOR  → Dynamic descriptor from build_report_descriptor()
+  IOCTL_HID_READ_REPORT            → Forward to manual input queue
+  IOCTL_HID_GET_FEATURE            → Device caps (0x07) or HQA blob (0x08)
+  IOCTL_HID_SET_FEATURE            → Input mode (0x04) or selective reporting (0x06)
+
+EvtUsbInterruptPipeReadComplete (input.rs)
+  → WdfMemoryGetBuffer → raw_data slice
+  → parse_report(raw_data, config, header_size, &mut fingers)
+  → KeQueryPerformanceCounter → scan_time delta
+  → Build PtpReport (contacts, scan_time, button)
+  → WdfIoQueueRetrieveNextRequest(input_queue)
+  → WdfMemoryCopyFromBuffer → WdfRequestComplete
 ```
 
-### 4.2 Wellspring Mode Switching
+### 4.3 DeviceContext (device.rs)
 
 ```rust
-/// Enable raw multitouch data from the trackpad
-fn wellspring_mode_set(device: &UsbDevice, config: &TrackpadConfig, enable: bool) -> Result<()> {
-    // 1. Read current mode via GET_REPORT class request
-    let mut mode_buf = vec![0u8; config.um_size];
-    usb_control_transfer(
-        device,
-        BmRequestDeviceToHost | BmRequestClass | BmRequestToInterface,
-        HID_GET_REPORT,
-        config.um_req_val,
-        config.um_req_idx,
-        &mut mode_buf,
-    )?;
-
-    // 2. Modify mode byte
-    mode_buf[config.um_switch_idx] = if enable { config.um_switch_on } else { config.um_switch_off };
-
-    // 3. Write back via SET_REPORT class request
-    usb_control_transfer(
-        device,
-        BmRequestHostToDevice | BmRequestClass | BmRequestToInterface,
-        HID_SET_REPORT,
-        config.um_req_val,
-        config.um_req_idx,
-        &mode_buf,
-    )?;
-
-    Ok(())
+#[repr(C)]
+pub struct DeviceContext {
+    pub usb_device: WDFUSBDEVICE,
+    pub interrupt_pipe: WDFUSBPIPE,
+    pub usb_interface: WDFUSBINTERFACE,
+    pub device_descriptor: USB_DEVICE_DESCRIPTOR,
+    pub usb_device_traits: ULONG,
+    pub input_queue: WDFQUEUE,
+    pub device_info: Option<&'static DeviceConfig>,
+    pub is_wellspring_mode_on: bool,
+    pub ptp_input_on: bool,
+    pub ptp_report_touch: bool,      // default: true
+    pub ptp_report_button: bool,     // default: true
+    pub last_report_time: i64,
 }
 ```
 
-### 4.3 Emergency Reset
+### 4.4 Wellspring Mode (usb.rs)
 
-```rust
-/// Recovery mechanism: toggle Wellspring off and back on
-fn emergency_reset(device: &UsbDevice, config: &TrackpadConfig) -> Result<()> {
-    wellspring_mode_set(device, config, false)?;
-    wellspring_mode_set(device, config, true)?;
-    Ok(())
-}
-```
+Read-modify-write via `WdfUsbTargetDeviceSendControlTransferSynchronously`:
+1. READ current mode (BMREQUEST_DEVICE_TO_HOST, request ID 1)
+2. Modify `buf[switch_idx]` = `switch_on` or `switch_off`
+3. WRITE modified mode (BMREQUEST_HOST_TO_DEVICE, request ID 9)
+
+Parameters come from `DeviceConfig.wellspring_msg` (size, req_val, req_idx, switch_idx).
 
 ---
 
@@ -687,588 +619,143 @@ Decision deferred to Phase 2.
 
 ---
 
-## 9. Implementation Phases (24 Phases)
+## 9. Implementation Phases (Consolidated — 10 Phases)
 
-Below is the full 24-phase implementation plan. Each phase produces a concrete,
-testable deliverable. Phases are sequential — each builds on the previous.
-
----
-
-### Phase 1: Rust Toolchain & Workspace Scaffolding
-
-**Goal:** Empty Cargo workspace that compiles with the WDK toolchain.
-
-**Deliverables:**
-- `rust-toolchain.toml` pinned to known-good nightly
-- Root `Cargo.toml` workspace with member stubs
-- `.cargo/config.toml` with WDK linker settings
-- `crates/amt-ptp-core/` — empty `#![no_std]` lib crate
-- `crates/amt-ptp-usb/` — empty KMDF driver crate stub
-- `crates/amt-ptp-bt/` — empty KMDF driver crate stub
-- `vhf-sys/` — empty FFI crate stub
-- Verify `cargo build` succeeds with WDK environment active
-
-**Key decisions:**
-- Pin nightly date in `rust-toolchain.toml` for reproducibility
-- Configure `[package.metadata.wdk]` for KMDF 1.33 in each driver crate
-- Set up `wdk-alloc` global allocator and `wdk-panic` handler in driver crates
+Consolidated from the original 24-phase plan into 10 focused phases.
+Each phase produces a substantial, testable deliverable.
 
 ---
 
-### Phase 2: Build System & CI Configuration
+### Phase 1: Workspace Scaffolding — **DONE** (commit `e5b622a`)
 
-**Goal:** Reproducible builds with `cargo-wdk`, INF stamping, and catalog generation.
-
-**Deliverables:**
-- `cargo-wdk` integration verified (build → stampinf → inf2cat → signtool)
-- Test-signing certificate generated for development
-- Build script (`build.rs`) in each driver crate configuring `wdk-build`
-- `.gitignore` for build artifacts (`.sys`, `.dll`, `.cat`, `.cer`)
-- Document build steps in `README.md`
-
-**Verification:** `cargo wdk build` produces a `.sys` file + signed `.cat` for each driver crate (even if the driver does nothing yet).
-
----
-
-### Phase 3: Core — Device Configuration Types
-
-**Goal:** Type-safe device configuration table in `amt-ptp-core`.
-
-**Deliverables:**
-- `crates/amt-ptp-core/src/device.rs`:
-  - `TrackpadConfig` struct with all device parameters (VID, PID, coordinate ranges, header sizes, Wellspring params, physical dimensions)
-  - `WellspringConfig` sub-struct for USB mode switching params
-  - `static MAGIC_TRACKPAD_2: TrackpadConfig` fully populated
-  - `static MAGIC_TRACKPAD_3: TrackpadConfig` placeholder (same as MT2, PID TBD)
-  - `fn config_for_usb_pid(pid: u16) -> Option<&TrackpadConfig>`
-  - `fn config_for_bt_pid(pid: u16) -> Option<&TrackpadConfig>`
-- `crates/amt-ptp-core/src/lib.rs`: module declarations, `#![no_std]`
-
-**Verification:** `cargo build` for core crate succeeds. Config lookup functions work in unit tests.
+**Delivered:**
+- `rust-toolchain.toml` pinned to `nightly-2025-02-10`
+- Root `Cargo.toml` workspace with 4 members, KMDF 1.33 metadata, workspace deps
+- `.cargo/config.toml` with `+crt-static` rustflag
+- `crates/amt-ptp-core/` — `#![no_std]` rlib crate
+- `crates/amt-ptp-usb/` — KMDF cdylib driver crate (wdk-sys features: usb, hid)
+- `crates/amt-ptp-bt/` — KMDF cdylib driver crate (wdk-sys features: hid)
+- `vhf-sys/` — placeholder FFI crate
+- `build.rs` in each driver crate calling `wdk_build::configure_wdk_binary_build()`
 
 ---
 
-### Phase 4: Core — TYPE5 Finger Parsing
+### Phase 2: Build System & INX Files — **DONE** (commit `9772189`)
 
-**Goal:** Bit-accurate parsing of Apple's 9-byte TYPE5 finger format.
-
-**Deliverables:**
-- `crates/amt-ptp-core/src/finger.rs`:
-  - `Type5Finger` — `#[repr(C, packed)]` 9-byte struct
-  - `x_raw(&self) -> i16` — 13-bit sign-extended X extraction
-  - `y_raw(&self) -> i16` — Y extraction with sign extension and negation
-  - `touch_major()`, `touch_minor()`, `size()`, `pressure()` — direct byte reads
-  - `contact_id() -> u8` — low 4 bits of byte 8
-  - `orientation() -> u8` — high 4 bits of byte 8
-  - `is_valid(&self) -> bool` — sanity check (non-zero touch area)
-- Unit tests with known byte sequences from the original C driver:
-  - Zero finger (all zeros)
-  - Positive X/Y coordinates
-  - Negative X/Y coordinates (sign extension edge cases)
-  - Maximum values (13-bit X = ±4095)
-  - Contact ID 0-15
-
-**Verification:** All unit tests pass. Byte-level compatibility with C implementation confirmed.
+**Delivered:**
+- `amt_ptp_usb.inx` — USB INF template matching 14 hardware IDs (13 T2 PIDs + MT2 0x0265), lower filter beneath mshidkmdf
+- `amt_ptp_bt.inx` — BT filter INF matching MT2 BT/USB HID Col01, null-devices Col02/Col03
+- `pkg/AmtPtpDevice.inx` — unified package INF shipping both .sys in single catalog
+- `Makefile.toml` — cargo-make build automation (check, build, test, package, lint tasks)
 
 ---
 
-### Phase 5: Core — Coordinate Transformation & Contact Mapping
+### Phase 3: Core Library — **DONE** (commit `d2b242c`, 30 tests)
 
-**Goal:** Transform raw Apple coordinates to PTP coordinate space.
+**Delivered** (consolidated original phases 3-10):
+- `constants.rs` (188 lines) — Apple VID/PIDs, header/finger/button offsets, report IDs, thresholds
+- `device.rs` (387 lines) — `TrackpadType` enum, `AxisParams`, `WellspringMsg`, `DeviceConfig`, `CONFIG_TABLE` (6 entries), `lookup_config()`
+- `error.rs` (46 lines) — `Error` enum: `BufferTooShort`, `MalformedPayload`, `FingerIndexOutOfRange`
+- `finger.rs` (350 lines) — `Finger` struct, `parse_type5_finger()` (13-bit signed extraction), `parse_legacy_finger()` (TYPE2-4), `parse_report()`, `transform_to_ptp()`, `is_tip_switch()`, `is_confident()`
+- `ptp.rs` (284 lines) — `PtpContact` (9B), `PtpReport` (50B), 5 feature report structs, `as_bytes()` for zero-copy HID submission
+- `hid.rs` (320 lines) — `DEFAULT_HQA_BLOB` (256B), `build_report_descriptor()` (3 TLCs, parameterized X/Y)
 
-**Deliverables:**
-- `crates/amt-ptp-core/src/transform.rs`:
-  - `fn transform_coordinate(raw: i16, min: i16) -> u16` — subtract min, clamp to >= 0
-  - `fn compute_tip_switch(touch_major: u8) -> bool` — `(touch_major << 1) > 0`
-  - `fn compute_confidence(touch_major: u8, touch_minor: u8) -> bool` — **BUG FIX**: check BOTH axes `< 345`
-  - `fn parse_finger_to_contact(finger: &Type5Finger, config: &TrackpadConfig) -> PtpContact`
-  - `fn parse_report_buffer(buf: &[u8], header_size: u8, config: &TrackpadConfig, contacts: &mut [PtpContact; 5]) -> (u8, bool)` — returns (contact_count, button_clicked)
-- Button state extraction from header byte at `config.button_offset`
-
-**Verification:** Unit tests with crafted buffers. Edge cases: 0 fingers, 1 finger, 5 fingers, >5 fingers (clamp), button pressed/released.
-
----
-
-### Phase 6: Core — PTP Report Structures & Generation
-
-**Goal:** Complete PTP report types matching the Windows PTP specification.
-
-**Deliverables:**
-- `crates/amt-ptp-core/src/ptp.rs`:
-  - `PtpContact` — `#[repr(C, packed)]` (flags, contact_id, x, y)
-  - `PtpReport` — `#[repr(C, packed)]` (report_id=0x05, contacts[5], scan_time, contact_count, is_button_clicked)
-  - `fn build_ptp_report(contacts: &[PtpContact; 5], count: u8, scan_time: u16, button: bool) -> PtpReport`
-  - Scan time calculation:
-    - `fn calculate_scan_time(current: u64, last: u64, frequency: u64) -> u16`
-    - **BUG FIX:** cap at `0xFFFF` not `0xFF`
-  - `const REPORTID_MULTITOUCH: u8 = 0x05`
-  - Verify struct sizes match expected byte counts with `static_assert`
-
-**Verification:** `core::mem::size_of::<PtpReport>()` == expected. Round-trip tests: build report → inspect bytes → match expected layout.
+**Test Coverage:**
+- Device config lookup (MT2, T2-13", unknown fallback, PTP logical max)
+- TYPE5 coordinate extraction (origin, positive X, negative X, contact ID/orientation, touch fields)
+- Finger transform (MT2 coordinates, negative clamping, tip switch, confidence)
+- PTP report struct sizes (9, 50, 3, 257, 2, 3, 4 bytes)
+- PTP report `as_bytes()` round-trip
+- HID descriptor (builds for MT2, contains all report IDs, correct size range)
+- HQA blob (length, first/last bytes)
 
 ---
 
-### Phase 7: Core — HID Report Descriptor Builder
+### Phase 4: USB Driver — **DONE** (commit `958b09d`, 7 modules, ~1,400 lines)
 
-**Goal:** Generate the PTP HID report descriptor programmatically, replacing static C byte arrays.
-
-**Deliverables:**
-- `crates/amt-ptp-core/src/hid_descriptor.rs`:
-  - Builder macros/functions for HID descriptor items:
-    - `usage_page()`, `usage()`, `collection()`, `end_collection()`
-    - `logical_minimum()`, `logical_maximum()`, `physical_minimum()`, `physical_maximum()`
-    - `report_size()`, `report_count()`, `report_id()`
-    - `input()`, `feature()`, `unit()`, `unit_exponent()`
-  - `fn build_ptp_report_descriptor(config: &TrackpadConfig) -> &'static [u8]` or `const` array:
-    - Digitizer/TouchPad TLC (usage page 0x0D, usage 0x05)
-    - 5 finger collections (Confidence, TipSwitch, ContactID, X, Y)
-    - Scan Time (16-bit, unit 100us)
-    - Contact Count
-    - Button (1 bit + 7 padding)
-    - Maximum Contact Count feature report (report ID 0x07)
-    - HQA certification feature report (report ID 0x08, 256 bytes)
-    - Configuration TLC (input mode report ID 0x04, function switch report ID 0x06)
-  - **BUG FIX:** ContactID width consistent (4-bit matching TYPE5 wire format)
-- Byte-for-byte comparison test against original C descriptor (from `MagicTrackpad2.h`)
-
-**Verification:** Generated descriptor matches expected bytes. Parseable by a HID descriptor parser tool.
+**Delivered** (consolidated original phases 12-16):
+- `lib.rs` (164 lines) — `DriverEntry` → `WdfDriverCreate` → `evt_driver_device_add` (filter setup, PnP/power callbacks, device creation with `DeviceContext`, queue initialization)
+- `device.rs` (114 lines) — `DeviceContext` struct (USB handles, queues, config, PTP state, timing), `get_device_context()`, `DEVICE_CONTEXT_TYPE_INFO`
+- `usb.rs` (325 lines) — `prepare_usb_hardware()` (USB device create, descriptor read, config lookup, interface select, pipe find, continuous reader), `set_wellspring_mode()` (read-modify-write control transfers), `evt_usb_interrupt_readers_failed()`
+- `power.rs` (106 lines) — `evt_device_d0_entry()` (Wellspring on, record time, start reader), `evt_device_d0_exit()` (stop target, Wellspring off)
+- `queue.rs` (165 lines) — HID IOCTL codes, `queue_initialize()` (default parallel + manual input, non-power-managed), `evt_io_internal_device_control()` dispatch, `dispatch_read_report()` (forward to manual queue)
+- `hid.rs` (393 lines) — `HidDescriptor`/`HidDeviceAttributes`/`HidXferPacket` types, `get_hid_descriptor()`, `get_device_attributes()`, `get_report_descriptor()`, `get_feature()` (device caps + HQA), `set_feature()` (input mode → Wellspring, selective reporting)
+- `input.rs` (147 lines) — `evt_usb_interrupt_pipe_read_complete()`: parse fingers → scan time → PTP report → dequeue & complete pending request
 
 ---
 
-### Phase 8: Core — Feature Report Handling
+### Phase 5: USB Driver Testing & Packaging — **NEXT**
 
-**Goal:** All PTP feature report types and their serialization/deserialization.
-
-**Deliverables:**
-- `crates/amt-ptp-core/src/feature.rs`:
-  - `DeviceCapsReport` — report ID 0x07 (max_contacts=5, button_type=0 clickpad)
-  - `HqaCertReport` — report ID 0x08 (256-byte hardcoded certification blob)
-  - `InputModeReport` — report ID 0x04 (mode: 0=mouse, 3=PTP)
-  - `FunctionSwitchReport` — report ID 0x06 (button/surface enable bits)
-  - `UserModeConfigReport` — report ID 0x09 (pressure/size thresholds for settings app)
-  - `fn handle_get_feature(report_id: u8, state: &DriverState, buf: &mut [u8]) -> Result<usize>`
-  - `fn handle_set_feature(report_id: u8, state: &mut DriverState, buf: &[u8]) -> Result<()>`
-  - `DriverState` struct holding runtime state (input_mode, function_switch, config thresholds)
-- `HID_DESCRIPTOR` struct for `IOCTL_HID_GET_DEVICE_DESCRIPTOR`
-- `HID_DEVICE_ATTRIBUTES` population helper
-
-**Verification:** Unit tests for each report: serialize → check bytes → deserialize → check fields.
-
----
-
-### Phase 9: Core — Scan Time, Utilities & Error Types
-
-**Goal:** Remaining shared utilities and a clean error type.
+**Goal:** Build on Windows, install on test hardware, verify end-to-end functionality.
 
 **Deliverables:**
-- `crates/amt-ptp-core/src/time.rs`:
-  - `ScanTimeTracker` struct (last_counter, frequency)
-  - `fn update(&mut self, current_counter: u64) -> u16` — returns scan time in 100us units
-  - Handles first-call (no previous timestamp) gracefully
-- `crates/amt-ptp-core/src/error.rs`:
-  - `enum PtpError { InvalidBuffer, UnsupportedDevice, FeatureNotSupported, ... }`
-  - Conversion to `NTSTATUS` for driver callers
-- `crates/amt-ptp-core/src/constants.rs`:
-  - All report IDs as named constants
-  - Apple vendor IDs, product IDs
-  - HQA certification blob as `static` array
-  - PTP max contact points
-- Clean up `lib.rs` public API — re-exports for driver crates
-
-**Verification:** Scan time tracker unit tests with simulated counter sequences. Error conversion tests.
-
----
-
-### Phase 10: Core — Comprehensive Unit Test Suite
-
-**Goal:** Full test coverage for `amt-ptp-core` before starting driver work.
-
-**Deliverables:**
-- `crates/amt-ptp-core/tests/` (integration tests, run in user-mode):
-  - `finger_parsing.rs` — exhaustive TYPE5 byte parsing tests
-  - `coordinate_transform.rs` — boundary conditions, clamping, sign extension
-  - `ptp_report.rs` — report generation, struct layout, byte-level verification
-  - `hid_descriptor.rs` — descriptor validity, comparison with C original
-  - `feature_reports.rs` — all feature report types serialize/deserialize correctly
-  - `scan_time.rs` — overflow, zero frequency, large gaps, normal operation
-  - `end_to_end.rs` — raw Apple USB/BT packet → complete PTP report (full pipeline)
-- Test with captured real-world packets from the original driver (if available) or synthetic equivalents
-- `cargo test` passes with 100% of `amt-ptp-core` public API covered
-
-**Verification:** `cargo test` — all pass. This is the quality gate before Phase 11.
-
----
-
-### Phase 11: VHF-sys — FFI Bindings Crate
-
-**Goal:** Rust FFI bindings for the Virtual HID Framework (`vhf.h`).
-
-**Deliverables:**
-- `vhf-sys/wrapper.h`: `#include <vhf.h>`
-- `vhf-sys/build.rs`: bindgen configuration targeting `vhf.h`, link `Vhfkm.lib`
-- `vhf-sys/src/lib.rs`:
-  - `VHFHANDLE`, `VHFOPERATIONHANDLE` type aliases
-  - `VHF_CONFIG` struct (`#[repr(C)]`)
-  - Callback type aliases: `EVT_VHF_ASYNC_OPERATION`, `EVT_VHF_READY_FOR_NEXT_READ_REPORT`, `EVT_VHF_CLEANUP`
-  - Extern functions: `VhfCreate`, `VhfStart`, `VhfReadReportSubmit`, `VhfAsyncOperationComplete`, `VhfDelete`
-  - `VHF_CONFIG_INIT` as a safe Rust helper function
-  - `HID_XFER_PACKET` struct (if not already in `wdk-sys`)
-- If bindgen can process `vhf.h` cleanly, use auto-generated bindings; otherwise hand-write them matching the Microsoft documentation exactly
-
-**Verification:** Crate compiles and links against `Vhfkm.lib`. Type sizes match C equivalents (checked via `static_assert` or build-time test).
-
----
-
-### Phase 12: USB Driver — KMDF Skeleton
-
-**Goal:** Minimal KMDF driver that loads, creates a device object, and unloads cleanly.
-
-**Deliverables:**
-- `crates/amt-ptp-usb/src/lib.rs`:
-  - `#![no_std]`, `#![no_main]`
-  - `extern crate wdk_alloc` + `extern crate wdk_panic`
-  - `#[export_name = "DriverEntry"]` function
-  - `WdfDriverCreate` with `EvtDriverDeviceAdd` callback
-- `crates/amt-ptp-usb/src/device.rs`:
-  - `EvtDriverDeviceAdd`:
-    - `WdfDeviceCreate` with PnP/power callback registration
-    - Device context allocation (`DEVICE_CONTEXT` struct with fields for USB handles, config, state)
-    - Two WDF queues: default (parallel, for HID IOCTLs) + manual (for pending read requests)
-  - `EvtDeviceCleanupCallback` stub
-- `crates/amt-ptp-usb/Cargo.toml`: dependencies on `wdk`, `wdk-sys`, `wdk-alloc`, `wdk-panic`, `amt-ptp-core`
-
-**Verification:** Driver builds to `.sys`. Can be installed on a test machine (does nothing, but loads/unloads without BSOD). Check with `sc query` or Device Manager.
-
----
-
-### Phase 13: USB Driver — Device Initialization & USB Interface Selection
-
-**Goal:** Driver discovers USB device, selects correct interface and interrupt pipe.
-
-**Deliverables:**
-- `crates/amt-ptp-usb/src/device.rs` additions:
-  - `EvtDevicePrepareHardware`:
-    - Create WDFUSBDEVICE via `WdfUsbTargetDeviceCreateWithParameters`
-    - `WdfUsbTargetDeviceGetDeviceDescriptor` — read VID/PID
-    - Match PID against `amt_ptp_core::config_for_usb_pid()` to get `TrackpadConfig`
-    - `WdfUsbTargetDeviceSelectConfig` — select first configuration
-    - Iterate interfaces via `WdfUsbTargetDeviceGetInterface`, find MI_01
-    - `WdfUsbInterfaceSelectSetting` — select alternate setting
-    - Find interrupt IN pipe via `WdfUsbInterfaceGetConfiguredPipe`
-    - Store USB device handle, pipe handle, and config in device context
-  - `EvtDeviceReleaseHardware`:
-    - Release USB resources
-  - `DEVICE_CONTEXT` struct with all necessary fields
-
-**Verification:** Install driver on MT2 USB. Debug traces show correct PID detected, interface selected, interrupt pipe found. Device Manager shows no errors.
-
----
-
-### Phase 14: USB Driver — Wellspring Mode Switching
-
-**Goal:** Enable/disable Apple multitouch mode via USB control transfers.
-
-**Deliverables:**
-- `crates/amt-ptp-usb/src/device.rs` additions:
-  - `fn wellspring_set_mode(device_context: &DeviceContext, enable: bool) -> NTSTATUS`:
-    - Build `WDF_USB_CONTROL_SETUP_PACKET` for GET_REPORT (class, device-to-host)
-    - `WdfUsbTargetDeviceSendControlTransferSynchronously` to read current mode
-    - Modify mode byte at `config.um_switch_idx`
-    - Build SET_REPORT control setup packet (class, host-to-device)
-    - Send modified buffer back
-  - `EvtDeviceD0Entry`: call `wellspring_set_mode(true)`
-  - `EvtDeviceD0Exit`: call `wellspring_set_mode(false)`
-  - Emergency reset function: toggle off → on
-
-**Verification:** After D0 entry, trackpad LED behavior changes (indicates mode switch). USB analyzer (USBPcap/Wireshark) shows correct control transfer sequence matching the original C driver.
-
----
-
-### Phase 15: USB Driver — Interrupt Pipe & Touch Input Processing
-
-**Goal:** Receive raw touch data from USB interrupt pipe and produce PTP reports.
-
-**Deliverables:**
-- `crates/amt-ptp-usb/src/interrupt.rs`:
-  - Configure WDF continuous reader on interrupt IN pipe:
-    - `WDF_USB_CONTINUOUS_READER_CONFIG_INIT` with completion callback
-    - `WdfUsbTargetPipeConfigContinuousReader`
-  - `EvtUsbTargetPipeReadComplete` callback:
-    - Read raw buffer from `WdfMemoryGetBuffer`
-    - Validate buffer size (>= header_size + at least 0 fingers)
-    - Extract button state from `buffer[config.button_offset]`
-    - Calculate number of fingers: `(data_len - header_size) / finger_size`
-    - Call `amt_ptp_core::parse_report_buffer()` to transform fingers
-    - Call `amt_ptp_core::build_ptp_report()` with contacts + scan time
-    - Dequeue pending read request from manual queue
-    - Copy PTP report to request output buffer
-    - Complete the request with `WdfRequestComplete`
-  - `EvtUsbTargetPipeReadersFailed` callback:
-    - Log error, attempt emergency reset
-    - Return TRUE to retry
-
-**Verification:** Connect MT2 via USB. Touch the trackpad. Debug traces show finger data being parsed. If a HID client is reading (even a test tool), PTP reports are delivered.
-
----
-
-### Phase 16: USB Driver — HID Minidriver IOCTL Dispatch
-
-**Goal:** Complete HID minidriver interface — Windows sees a Precision Touchpad.
-
-**Deliverables:**
-- `crates/amt-ptp-usb/src/hid.rs`:
-  - `fn dispatch_hid_ioctl(queue: WDFQUEUE, request: WDFREQUEST, ioctl: ULONG, ...)`:
-    - `IOCTL_HID_GET_DEVICE_DESCRIPTOR` → return `HID_DESCRIPTOR` struct
-    - `IOCTL_HID_GET_REPORT_DESCRIPTOR` → return PTP descriptor from `amt_ptp_core::build_ptp_report_descriptor()`
-    - `IOCTL_HID_GET_DEVICE_ATTRIBUTES` → return `HID_DEVICE_ATTRIBUTES` (VID, PID, version)
-    - `IOCTL_HID_READ_REPORT` → queue in manual queue (completed by interrupt handler)
-    - `IOCTL_HID_GET_FEATURE` → delegate to `amt_ptp_core::handle_get_feature()`
-    - `IOCTL_HID_SET_FEATURE` → delegate to `amt_ptp_core::handle_set_feature()`
-    - `IOCTL_HID_GET_STRING` → return manufacturer/product/serial strings
-    - All others → `STATUS_NOT_SUPPORTED`
-- `crates/amt-ptp-usb/src/queue.rs`:
-  - Default queue `EvtIoInternalDeviceControl` routes to `dispatch_hid_ioctl`
-  - Manual queue for read report requests
-
-**Verification:** Device appears as "HID-compliant touch pad" in Device Manager. Windows Settings → Touchpad shows the device. Basic touch input works.
-
----
-
-### Phase 17: USB Driver — INF, Build, Package & Initial Testing
-
-**Goal:** Complete, installable USB driver package. First end-to-end test.
-
-**Deliverables:**
-- `crates/amt-ptp-usb/amt-ptp-usb.inx`:
-  - Hardware ID: `USB\VID_05AC&PID_0265&MI_01`
-  - Service configuration (KMDF kernel driver, demand start)
-  - KMDF coinstaller directives
-  - Device description strings
-- Build verification:
-  - `cargo wdk build` produces: `amt_ptp_usb.sys`, `amt-ptp-usb.inf`, `amt-ptp-usb.cat`
-  - Test-signed with development certificate
+- `cargo wdk build` produces `amt_ptp_usb.sys` + signed `.cat`
 - Testing checklist:
   - [ ] Driver installs on MT2 USB without errors
   - [ ] Device Manager shows "Precision Touchpad" device
   - [ ] Single finger move → cursor moves
-  - [ ] Two-finger scroll works
-  - [ ] Three-finger gestures work (swipe, task view)
-  - [ ] Pinch-to-zoom works
-  - [ ] Physical click works
-  - [ ] Tap-to-click works
-  - [ ] Sleep/resume: touchpad recovers
-  - [ ] Unplug/replug: device re-enumerates correctly
+  - [ ] Two-finger scroll, three-finger gestures, pinch-to-zoom
+  - [ ] Physical click + tap-to-click
+  - [ ] Sleep/resume recovery
+  - [ ] Unplug/replug re-enumeration
 - Bug fixes for any issues found during testing
 
-**Verification:** All checklist items pass. USB driver is feature-complete for MT2.
+---
+
+### Phase 6: VHF-sys FFI Bindings
+
+**Goal:** Rust FFI bindings for the Virtual HID Framework (`vhf.h`).
+
+**Deliverables:**
+- `vhf-sys/wrapper.h`, `build.rs` (bindgen + link `Vhfkm.lib`)
+- `VHF_CONFIG`, `VHFHANDLE`, `VHFOPERATIONHANDLE`, callback types
+- `VhfCreate`, `VhfStart`, `VhfReadReportSubmit`, `VhfAsyncOperationComplete`, `VhfDelete`
 
 ---
 
-### Phase 18: BT Driver — KMDF Filter Driver Skeleton
+### Phase 7: BT Driver — Skeleton + VHF
 
-**Goal:** Minimal KMDF filter driver that loads in the BT HID stack without disrupting it.
+**Goal:** KMDF filter driver that creates a VHF virtual PTP device.
 
 **Deliverables:**
-- `crates/amt-ptp-bt/src/lib.rs`:
-  - `#![no_std]`, `#![no_main]`
-  - `DriverEntry` → `WdfDriverCreate`
-- `crates/amt-ptp-bt/src/device.rs`:
-  - `EvtDriverDeviceAdd`:
-    - `WdfFdoInitSetFilter` — mark as filter driver
-    - `WdfDeviceCreate` with PnP/power/self-managed-IO callbacks
-    - `DEVICE_CONTEXT` struct (VHF handle, IO target for BT transport, config, state, buffers)
-    - Default WDF queue (forward-all for now)
-  - Self-managed I/O stubs (init, suspend, restart, cleanup)
-
-**Verification:** Driver loads as filter in BT HID stack. Original BT mouse functionality still works (filter is pass-through). No BSOD.
+- `DriverEntry`, `EvtDriverDeviceAdd` (WdfFdoInitSetFilter)
+- Self-managed I/O lifecycle (init, suspend, restart, cleanup)
+- `VhfDevice` safe wrapper: create → start → submit → delete
+- Virtual PTP device appears in Device Manager
 
 ---
 
-### Phase 19: BT Driver — VHF Virtual Device Creation & Lifecycle
+### Phase 8: BT Driver — Transport & Input
 
-**Goal:** Create a virtual PTP device via VHF that Windows recognizes as a touchpad.
+**Goal:** Read raw BT HID data, transform to PTP, submit via VHF.
 
 **Deliverables:**
-- `crates/amt-ptp-bt/src/vhf.rs`:
-  - Safe wrapper around `vhf-sys` raw FFI:
-    - `struct VhfDevice { handle: VHFHANDLE }`
-    - `fn create(wdm_device: PDEVICE_OBJECT, descriptor: &[u8], config: &TrackpadConfig, callbacks: VhfCallbacks) -> Result<Self>`
-    - `fn start(&self) -> Result<()>`
-    - `fn submit_report(&self, report: &PtpReport) -> Result<()>` — wraps `VhfReadReportSubmit`
-    - `fn complete_async_op(handle: VHFOPERATIONHANDLE, status: NTSTATUS)`
-    - `fn delete(self)` — consumes self, calls `VhfDelete(wait=TRUE)`
-  - `VhfCallbacks` struct with function pointers for get/set feature
-- `crates/amt-ptp-bt/src/device.rs` additions:
-  - `EvtDeviceSelfManagedIoInit`:
-    - Get WDM device object via `WdfDeviceWdmGetDeviceObject`
-    - Get `TrackpadConfig` for MT2 BT
-    - Build PTP report descriptor via `amt_ptp_core`
-    - Call `VhfDevice::create()` + `start()`
-    - Store VHF device in context
-  - `EvtDeviceSelfManagedIoCleanup`:
-    - Call `VhfDevice::delete()`
-
-**Verification:** When driver loads on BT MT2, a second HID device appears in Device Manager — the virtual PTP touchpad created by VHF. Windows Settings → Touchpad sees it.
+- BT transport: `WdfIoTargetCreate`, read request chain, lookaside buffers
+- Multitouch activation (feature report 0xF1)
+- Read completion: parse BT header (4 bytes), `parse_report()`, `VhfReadReportSubmit()`
+- VHF feature callbacks: get/set feature delegating to core
 
 ---
 
-### Phase 20: BT Driver — Bluetooth HID Transport Communication
+### Phase 9: BT Driver — Recovery, Testing & Packaging
 
-**Goal:** Read raw HID reports from the real BT device and send feature reports.
+**Goal:** Robust BT driver with error recovery. Installable package.
 
 **Deliverables:**
-- `crates/amt-ptp-bt/src/transport.rs`:
-  - `struct BtTransport { io_target: WDFIOTARGET }`
-  - Setup:
-    - Create self-managed IO target (`WdfIoTargetCreate`)
-    - Open lower device's WDM device object
-    - `WdfIoTargetOpen` with `WdfIoTargetOpenUseExistingDevice`
-  - Read path:
-    - `fn issue_read_request(&self, context: &DeviceContext) -> Result<()>`:
-      - Allocate buffer from lookaside list
-      - Build `IOCTL_HID_READ_REPORT` IRP
-      - `WdfIoTargetSendInternalIoctlAsynchronously` with completion callback
-    - Completion callback registered to process incoming data
-  - Write path:
-    - `fn send_set_feature(&self, report_id: u8, data: &[u8]) -> Result<()>`:
-      - Build `IOCTL_HID_SET_FEATURE` with `HID_XFER_PACKET`
-      - `WdfIoTargetSendInternalIoctlSynchronously`
-  - Buffer management:
-    - WDF lookaside list for read buffers (`WdfLookasideListCreate`)
-    - Proper cleanup on completion
-
-**Verification:** Debug traces show raw BT HID reports being received from the trackpad. Feature report (multitouch enable) sent successfully.
+- Timer-based retry, BT disconnect/reconnect handling
+- INF verified, `cargo wdk build` produces `amt_ptp_bt.sys`
+- Full BT testing checklist (same as USB + BT-specific: disconnect/reconnect, power cycle)
 
 ---
 
-### Phase 21: BT Driver — Input Processing & VHF Report Submission
+### Phase 10: MT3 Support, Settings App & Final Packaging
 
-**Goal:** Complete data pipeline: BT raw data → transform → VHF virtual PTP device.
-
-**Deliverables:**
-- `crates/amt-ptp-bt/src/transport.rs` — read completion callback:
-  - Validate incoming buffer (check report ID, minimum size)
-  - Parse BT header (4 bytes for TYPE5 BT)
-  - Extract button state
-  - Call `amt_ptp_core::parse_report_buffer()` with BT header size
-  - Call `amt_ptp_core::build_ptp_report()`
-  - Update scan time via `ScanTimeTracker`
-  - Call `vhf_device.submit_report(&ptp_report)`
-  - Re-issue next read request to BT transport
-- Handle edge cases:
-  - Zero-length reports (ignore, re-issue read)
-  - Unknown report IDs (pass through or ignore)
-  - Buffer too small (log warning, re-issue read)
-
-**Verification:** Touch MT2 over Bluetooth. Debug traces show finger data flowing through pipeline. VHF receives PTP reports. Cursor should start moving if Windows PTP client is consuming from the virtual device.
-
----
-
-### Phase 22: BT Driver — VHF Feature Report Callbacks & Multitouch Activation
-
-**Goal:** VHF virtual device responds to Windows PTP queries. Trackpad multitouch enabled.
+**Goal:** MT3 hardware support, settings app, unified distribution package.
 
 **Deliverables:**
-- `crates/amt-ptp-bt/src/vhf.rs` — callback implementations:
-  - `on_get_feature(context, op_handle, op_context, xfer_packet)`:
-    - Read `report_id` from `xfer_packet`
-    - Delegate to `amt_ptp_core::handle_get_feature()`
-    - Copy result into `xfer_packet.reportBuffer`
-    - `VhfAsyncOperationComplete(op_handle, STATUS_SUCCESS)`
-  - `on_set_feature(context, op_handle, op_context, xfer_packet)`:
-    - Read report_id and data from `xfer_packet`
-    - Delegate to `amt_ptp_core::handle_set_feature()`
-    - When input mode set to PTP (mode=3):
-      - Send BT multitouch enable: feature report 0xF1 = [0xF1, 0x02, 0x01] to real device
-      - Start issuing read requests to BT transport
-    - `VhfAsyncOperationComplete(op_handle, STATUS_SUCCESS)`
-- Multitouch activation sequence:
-  - On `EvtDeviceSelfManagedIoInit` after VHF start:
-    - Send feature 0xF1 to BT transport to enable multitouch
-    - Begin continuous read request chain
-
-**Verification:** Windows PTP client queries device caps → gets max_contacts=5, clickpad. Input mode set to PTP. Multitouch data flows. Full touch/gesture functionality works.
-
----
-
-### Phase 23: BT Driver — Recovery, INF, Build & Testing
-
-**Goal:** Robust BT driver with error recovery. Complete installable package. End-to-end test.
-
-**Deliverables:**
-- Recovery mechanisms in `transport.rs`:
-  - Timer-based retry (2-3 second WDF timer) when read requests fail
-  - Work item for re-issuing reads after spurious completions
-  - Handle BT disconnection gracefully (stop reads, VHF continues to exist)
-  - Handle BT reconnection (re-enable multitouch, restart reads)
-- `crates/amt-ptp-bt/amt-ptp-bt.inx`:
-  - Hardware ID: `HID\{00001124-0000-1000-8000-00805f9b34fb}_VID&0001004c_PID&0265&Col01`
-  - Upper/lower filter registration with `vhf` as lower filter
-  - Service configuration
-  - Col02 null device entry (suppress auxiliary collection)
-- Build verification:
-  - `cargo wdk build` produces: `amt_ptp_bt.sys`, INF, CAT
-  - Test-signed
-- Testing checklist:
-  - [ ] Driver installs on BT MT2 without errors
-  - [ ] Virtual PTP device appears in Device Manager
-  - [ ] Single finger move → cursor moves
-  - [ ] Two-finger scroll works
-  - [ ] Three-finger gestures work
-  - [ ] Pinch-to-zoom works
-  - [ ] Physical click works
-  - [ ] Tap-to-click works
-  - [ ] Sleep/resume: trackpad recovers
-  - [ ] BT disconnect/reconnect: trackpad recovers
-  - [ ] Power cycle trackpad: device re-enumerates and works
-  - [ ] No BSOD under stress (rapid connect/disconnect)
-
-**Verification:** All checklist items pass. BT driver is feature-complete for MT2.
-
----
-
-### Phase 24: Magic Trackpad 3, Settings App & Final Packaging
-
-**Goal:** MT3 support, settings app, unified driver package, documentation.
-
-**Deliverables:**
-
-**MT3 Support:**
-- Reverse-engineer MT3 protocol with user's hardware:
-  - USB descriptor dump → identify PID
-  - USBPcap trace → verify TYPE5 format
-  - Compare coordinate ranges, header sizes, multitouch enable sequence
-- Add `MAGIC_TRACKPAD_3` config to `amt-ptp-core`
-- Update INF files with MT3 hardware IDs (USB + BT)
-- Test both transports on MT3
-
-**Settings App (`amt-ptp-settings`):**
-- Technology: Rust + `windows-rs` (Win32 GUI) or egui
-- Device discovery via HID device enumeration
-- Battery status reading (report ID 0x90)
-- Configuration via feature report 0x09:
-  - Pressure qualification level
-  - Single/multi-contact size qualification level
-- Real-time device status display
-
-**Unified Package:**
-- Combined INF routing MT2 + MT3 USB and BT to correct drivers
-- Driver signing with production certificate (if available)
-- Installer (optional): `cargo wdk` package output or custom NSIS/WiX installer
-- `README.md` with installation instructions, supported devices, troubleshooting
-
-**Defuzz Filter (optional):**
-- Implement contact position smoothing in `amt-ptp-core`
-- Configurable via settings app
-- Simple exponential moving average or Kalman filter on X/Y
-
-**Documentation:**
-- Architecture overview in `README.md`
-- Per-crate `README.md` with API documentation
-- `cargo doc` generates full API docs
-- Contributing guide
-
-**Verification:** Both MT2 and MT3 work over both USB and BT. Settings app communicates with drivers. Package installs cleanly on a fresh Windows 11 22H2 machine.
+- MT3 protocol reverse-engineering, config entry, INF updates
+- Settings app (Rust + windows-rs or egui): device discovery, battery status, config
+- Unified INF + installer, production signing, documentation
 
 ---
 
