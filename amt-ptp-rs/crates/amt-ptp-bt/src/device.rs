@@ -71,11 +71,13 @@ pub struct DeviceContext {
     /// Lookaside list for read request buffers.
     pub hid_read_buffer_lookaside: WDFLOOKASIDE,
 
-    // ── Recovery (Phase 9) ──────────────────────────────────────
-    /// Timer for multitouch configuration retry.
+    // ── Recovery ──────────────────────────────────────────────────
+    /// Timer for multitouch configuration retry (fires after 2 seconds).
     pub recovery_timer: WDFTIMER,
     /// Work item for deferred recovery operations.
     pub recovery_work_item: WDFWORKITEM,
+    /// Number of consecutive recovery attempts (reset on success).
+    pub recovery_attempts: u32,
 }
 
 impl DeviceContext {
@@ -107,6 +109,7 @@ impl DeviceContext {
         self.hid_read_buffer_lookaside = core::ptr::null_mut();
         self.recovery_timer = core::ptr::null_mut();
         self.recovery_work_item = core::ptr::null_mut();
+        self.recovery_attempts = 0;
     }
 }
 

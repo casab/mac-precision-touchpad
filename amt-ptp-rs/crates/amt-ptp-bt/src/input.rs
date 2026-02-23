@@ -16,6 +16,7 @@
 use wdk_sys::*;
 
 use crate::device::get_device_context;
+use crate::recovery;
 use crate::transport;
 use crate::vhf_device;
 
@@ -53,9 +54,12 @@ pub unsafe extern "C" fn evt_bt_read_complete(
         call_unsafe_wdf_function_binding!(WdfRequestGetStatus, request)
     };
     if !NT_SUCCESS(status) {
-        // Read failed — clean up and don't resubmit (recovery timer will handle it)
+        // Read failed — clean up and schedule recovery
         unsafe {
             call_unsafe_wdf_function_binding!(WdfObjectDelete, request.cast());
+        }
+        if ctx.device_configured {
+            unsafe { recovery::start_recovery_timer(ctx) };
         }
         return;
     }
@@ -143,12 +147,13 @@ pub unsafe extern "C" fn evt_bt_read_complete(
     let (count, button) = match parse_report(raw_data, config, header_size, &mut fingers) {
         Ok(result) => result,
         Err(_) => {
-            // Malformed data — discard and resubmit
+            // Malformed data — may indicate device not in multitouch mode.
+            // Schedule recovery to re-activate and resubmit.
             unsafe {
                 call_unsafe_wdf_function_binding!(WdfObjectDelete, request.cast());
             }
             if ctx.device_configured {
-                let _ = unsafe { transport::issue_read_request(device) };
+                unsafe { recovery::start_recovery_timer(ctx) };
             }
             return;
         }

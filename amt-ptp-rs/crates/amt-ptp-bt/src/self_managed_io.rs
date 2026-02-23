@@ -23,6 +23,7 @@ use amt_ptp_core::hid::build_report_descriptor;
 
 use crate::device::get_device_context;
 use crate::hid;
+use crate::recovery;
 use crate::transport;
 use crate::vhf_device;
 
@@ -132,21 +133,22 @@ pub unsafe extern "C" fn evt_self_managed_io_init(device: WDFDEVICE) -> NTSTATUS
     ctx.last_report_time = unsafe { *counter.QuadPart() };
 
     // Activate multitouch mode on the BT trackpad (report 0xF1)
-    let status = unsafe { transport::activate_multitouch(ctx) };
-    if !NT_SUCCESS(status) {
-        // Non-fatal: the device may not be ready yet. Phase 9 recovery
-        // timer will retry. Continue with device setup.
-        println!("SelfManagedIoInit: multitouch activation failed: {status:#x} (will retry)");
-    }
-
     ctx.device_configured = true;
     ctx.vhf_ready = true;
+    ctx.recovery_attempts = 0;
 
-    // Issue the first read request to start receiving touch data
-    let status = unsafe { transport::issue_read_request(device) };
+    let status = unsafe { transport::activate_multitouch(ctx) };
     if !NT_SUCCESS(status) {
-        println!("SelfManagedIoInit: first read request failed: {status:#x}");
-        // Non-fatal: Phase 9 recovery will handle this
+        // Non-fatal: the device may not be ready yet. Schedule recovery.
+        println!("SelfManagedIoInit: multitouch activation failed: {status:#x} (scheduling retry)");
+        unsafe { recovery::start_recovery_timer(ctx) };
+    } else {
+        // Issue the first read request to start receiving touch data
+        let status = unsafe { transport::issue_read_request(device) };
+        if !NT_SUCCESS(status) {
+            println!("SelfManagedIoInit: first read request failed: {status:#x} (scheduling retry)");
+            unsafe { recovery::start_recovery_timer(ctx) };
+        }
     }
 
     println!(
@@ -184,19 +186,21 @@ pub unsafe extern "C" fn evt_self_managed_io_restart(device: WDFDEVICE) -> NTSTA
     }
 
     // Re-activate multitouch mode (power-down may have reset the trackpad)
-    let status = unsafe { transport::activate_multitouch(ctx) };
-    if !NT_SUCCESS(status) {
-        println!("SelfManagedIoRestart: multitouch activation failed: {status:#x}");
-        // Non-fatal: Phase 9 recovery timer will retry
-    }
-
     ctx.device_configured = true;
     ctx.vhf_ready = true;
+    ctx.recovery_attempts = 0;
 
-    // Reissue read request to resume data flow
-    let status = unsafe { transport::issue_read_request(device) };
+    let status = unsafe { transport::activate_multitouch(ctx) };
     if !NT_SUCCESS(status) {
-        println!("SelfManagedIoRestart: read request failed: {status:#x}");
+        println!("SelfManagedIoRestart: multitouch activation failed: {status:#x} (scheduling retry)");
+        unsafe { recovery::start_recovery_timer(ctx) };
+    } else {
+        // Reissue read request to resume data flow
+        let status = unsafe { transport::issue_read_request(device) };
+        if !NT_SUCCESS(status) {
+            println!("SelfManagedIoRestart: read request failed: {status:#x} (scheduling retry)");
+            unsafe { recovery::start_recovery_timer(ctx) };
+        }
     }
 
     println!("SelfManagedIoRestart: device reconfigured");
@@ -216,6 +220,9 @@ pub unsafe extern "C" fn evt_self_managed_io_suspend(device: WDFDEVICE) -> NTSTA
 
     // Mark device as not configured first to prevent read resubmission
     ctx.device_configured = false;
+
+    // Stop the recovery timer if running
+    unsafe { recovery::stop_recovery_timer(ctx) };
 
     // Cancel pending read requests by stopping the I/O target.
     // WdfIoTargetStop with WdfIoTargetCancelSentIo cancels all outstanding requests.

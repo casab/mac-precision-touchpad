@@ -51,6 +51,7 @@ static GLOBAL_ALLOCATOR: WdkAllocator = WdkAllocator;
 mod device;
 mod hid;
 mod input;
+mod recovery;
 mod self_managed_io;
 mod transport;
 mod vhf_device;
@@ -188,6 +189,13 @@ unsafe extern "C" fn evt_driver_device_add(
     if ctx.wdm_device_object.is_null() {
         println!("WdfDeviceWdmGetDeviceObject returned NULL");
         return STATUS_UNSUCCESSFUL;
+    }
+
+    // Create recovery timer and work item for automatic retry on failures
+    let status = unsafe { recovery::create_recovery_objects(wdf_device) };
+    if !NT_SUCCESS(status) {
+        println!("create_recovery_objects failed: {status:#x}");
+        return status;
     }
 
     println!("BT filter device created successfully");
