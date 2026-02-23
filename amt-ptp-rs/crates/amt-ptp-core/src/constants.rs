@@ -177,6 +177,12 @@ pub const PTP_COLLECTION_MOUSE: u8 = 0;
 /// Windows Precision Touchpad collection mode.
 pub const PTP_COLLECTION_WINDOWS: u8 = 3;
 
+/// Synthetic Vendor ID for the virtual PTP device.
+///
+/// Used instead of Apple's real VID to avoid conflicts with the
+/// actual Apple HID device in the device stack.
+pub const DEVICE_VID: u16 = 0x8910;
+
 /// Driver/device version reported in HID descriptor.
 pub const DEVICE_VERSION: u8 = 0x01;
 

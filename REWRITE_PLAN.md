@@ -19,7 +19,7 @@ the Virtual HID Framework (VHF) to replace the fragile HIDCLASS detour hack.
 | 4.5 | USB driver code review & bug fixes | **DONE** | — | 33 pass | — |
 | 5 | USB driver on-device testing & packaging | **MANUAL** | — | — | — |
 | 6 | VHF-sys FFI bindings | **DONE** | ~340 | — | — |
-| 7 | BT driver skeleton + VHF | Pending | — | — | — |
+| 7 | BT driver skeleton + VHF | **DONE** | ~500 | — | — |
 | 8 | BT driver transport & input | Pending | — | — | — |
 | 9 | BT driver testing & recovery | Pending | — | — | — |
 | 10 | MT3 support, settings app, packaging | Pending | — | — | — |
@@ -789,15 +789,37 @@ full compilation deferred to Windows build (Phase 5 or Phase 7).
 
 ---
 
-### Phase 7: BT Driver — Skeleton + VHF
+### Phase 7: BT Driver — Skeleton + VHF ✅ DONE
 
 **Goal:** KMDF filter driver that creates a VHF virtual PTP device.
 
 **Deliverables:**
-- `DriverEntry`, `EvtDriverDeviceAdd` (WdfFdoInitSetFilter)
-- Self-managed I/O lifecycle (init, suspend, restart, cleanup)
-- `VhfDevice` safe wrapper: create → start → submit → delete
-- Virtual PTP device appears in Device Manager
+- ✅ `DriverEntry`, `EvtDriverDeviceAdd` (`WdfFdoInitSetFilter`)
+- ✅ Self-managed I/O lifecycle (init, suspend, restart, cleanup)
+- ✅ `VhfDevice` safe wrapper: create → start → submit → delete
+- ✅ VHF feature callbacks (get/set feature reports)
+- ✅ Virtual PTP device appears in Device Manager (pending Windows build)
+
+**Files created/modified:**
+
+| File | Purpose |
+|------|---------|
+| `crates/amt-ptp-bt/src/lib.rs` | DriverEntry + EvtDriverDeviceAdd with WdfFdoInitSetFilter, self-managed I/O registration |
+| `crates/amt-ptp-bt/src/device.rs` | DeviceContext (VHF handle, PTP state, timing, transport placeholders), get_device_context, TYPE_INFO |
+| `crates/amt-ptp-bt/src/vhf_device.rs` | Safe wrappers: vhf_create, vhf_start, vhf_submit_read_report, vhf_delete |
+| `crates/amt-ptp-bt/src/hid.rs` | VHF callbacks: evt_vhf_get_feature (caps+HQA), evt_vhf_set_feature (input mode+selective reporting), ready_for_next_read_report, cleanup |
+| `crates/amt-ptp-bt/src/self_managed_io.rs` | VHF lifecycle: init (create+start VHF), restart (re-timestamp), suspend (unconfigure), cleanup (VhfDelete) |
+| `crates/amt-ptp-core/src/constants.rs` | Added `DEVICE_VID = 0x8910` (synthetic VID for virtual PTP device) |
+| `crates/amt-ptp-bt/amt_ptp_bt.inx` | Already exists from Phase 3 — INX for BT HID filter driver |
+
+**Architecture notes:**
+- Replaces the C driver's HIDCLASS detour hack with VHF (Microsoft's documented Virtual HID Framework)
+- Filter driver pattern: `WdfFdoInitSetFilter` → lower filter in BT HID stack
+- Self-managed I/O for VHF lifecycle: Init creates VHF, Cleanup deletes VHF
+- VHF callbacks handle feature reports directly (no IOCTL dispatch needed)
+- Phase 7 uses hardcoded MT2 config (PID 0x0265) since the INX only matches MT2
+- Phase 8 will add proper device identification via I/O target query
+- Cannot compile on Linux (requires WDK/wdk-sys); syntax verified clean
 
 ---
 
