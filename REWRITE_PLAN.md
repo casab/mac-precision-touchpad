@@ -14,9 +14,10 @@ the Virtual HID Framework (VHF) to replace the fragile HIDCLASS detour hack.
 |-------|-------------|--------|-------|-------|--------|
 | 1 | Workspace scaffolding | **DONE** | ~200 | — | `e5b622a` |
 | 2 | Build system & INX driver files | **DONE** | ~500 | — | `9772189` |
-| 3 | Core library (device, finger, ptp, hid, error) | **DONE** | ~1,600 | 30 pass | `d2b242c` |
+| 3 | Core library (device, finger, ptp, hid, error) | **DONE** | ~1,600 | 33 pass | `d2b242c` |
 | 4 | USB driver (full HID miniport, 7 modules) | **DONE** | ~1,400 | — | `958b09d` |
-| 5 | USB driver testing & packaging | Pending | — | — | — |
+| 4.5 | USB driver code review & bug fixes | **DONE** | — | 33 pass | — |
+| 5 | USB driver on-device testing & packaging | **MANUAL** | — | — | — |
 | 6 | VHF-sys FFI bindings | Pending | — | — | — |
 | 7 | BT driver skeleton + VHF | Pending | — | — | — |
 | 8 | BT driver transport & input | Pending | — | — | — |
@@ -40,8 +41,9 @@ implementation to reduce overhead and deliver larger coherent units:
   touch input processing → PTP reports)
 
 Remaining phases:
-- **Phase 5** = Original Phase 17 (USB build verification + on-device testing)
-- **Phase 6** = Original Phase 11 (VHF FFI bindings crate)
+- **Phase 4.5** = Code review + bug fixes (scan time, selective reporting, physical max)
+- **Phase 5** = Original Phase 17 (USB build verification + on-device testing) — **MANUAL, non-blocking until Phase 9**
+- **Phase 6** = Original Phase 11 (VHF FFI bindings crate) — **NEXT**
 - **Phases 7-9** = Original Phases 18-23 (BT driver)
 - **Phase 10** = Original Phase 24 (MT3, settings app, final packaging)
 
@@ -243,7 +245,7 @@ All `#[repr(C, packed)]` with verified sizes via unit tests:
 | `PtpReport` | 50B | 0x05 |
 | `PtpDeviceCapsReport` | 3B | 0x07 |
 | `PtpInputModeReport` | 2B | 0x04 |
-| `PtpSelectiveReportingReport` | 3B | 0x06 |
+| `PtpSelectiveReportingReport` | 2B | 0x06 |
 | `PtpHqaCertificationReport` | 257B | 0x08 |
 | `PtpUserModeAppConfReport` | 4B | 0x09 |
 
@@ -588,13 +590,16 @@ ServiceBinary  = %13%\amt_ptp_bt.sys
 
 ## 7. Bug Fixes (from original C codebase)
 
-| # | Bug | Fix |
-|---|-----|-----|
-| 1 | **Duplicate confidence check**: TouchMinor checked twice instead of TouchMinor AND TouchMajor | Check both: `touch_minor << 1 < 345 && touch_major << 1 < 345` |
-| 2 | **Scan time cap too low**: Capped at 0xFF (25.5ms) but field is 16-bit | Cap at 0xFFFF (6.5 seconds, effectively uncapped for normal use) |
-| 3 | **PTP_CONTACT struct inconsistency**: ContactID field size varies between modules | Standardize ContactID to match HID descriptor (use appropriate bit width) |
-| 4 | **Missing defuzz**: Raw contact data can be jittery | Implement optional contact smoothing/defuzz filter in core |
-| 5 | **No emergency reset for BT**: Only USB had recovery mechanism | Add timer-based recovery for both transports |
+| # | Bug | Fix | Status |
+|---|-----|-----|--------|
+| 1 | **Duplicate confidence check**: TouchMinor checked twice instead of TouchMinor AND TouchMajor | Check both: `touch_minor << 1 < 345 && touch_major << 1 < 345` | Fixed in Phase 3 |
+| 2 | **Scan time cap too low**: Capped at 0xFF (25.5ms) but field is 16-bit | Cap at 0xFFFF (6.5 seconds, effectively uncapped for normal use) | Fixed in Phase 4 |
+| 3 | **PTP_CONTACT struct inconsistency**: ContactID field size varies between modules | Standardize ContactID to match HID descriptor (use appropriate bit width) | Fixed in Phase 3 |
+| 4 | **Missing defuzz**: Raw contact data can be jittery | Implement optional contact smoothing/defuzz filter in core | Deferred |
+| 5 | **No emergency reset for BT**: Only USB had recovery mechanism | Add timer-based recovery for both transports | Phase 9 |
+| 6 | **Scan time units wrong**: `/100` hardcoded instead of using QPC frequency. Gives ~10µs units, not 100µs. | Query `KeQueryPerformanceCounter` frequency, compute `ticks * 10000 / freq` | **Fixed in Phase 4.5** |
+| 7 | **Selective reporting struct mismatch**: Extra `device_mode` byte in Rust struct doesn't exist in HID descriptor. SET_FEATURE always fails. | Remove `device_mode`, match C driver's 2-byte struct | **Fixed in Phase 4.5** |
+| 8 | **Physical max = logical max in descriptor**: Windows sees ~76cm trackpad, breaking gesture DPI. | Add per-device `x_physical`/`y_physical` from C driver's WellspringMt2.h/T2.h | **Fixed in Phase 4.5** |
 
 ---
 
@@ -684,21 +689,82 @@ Each phase produces a substantial, testable deliverable.
 
 ---
 
-### Phase 5: USB Driver Testing & Packaging — **NEXT**
+### Phase 4.5: USB Driver Code Review & Bug Fixes — **DONE**
+
+**Goal:** Static code review of the USB driver against the C driver source and PTP spec.
+
+**Bugs found and fixed:**
+
+1. **Scan time frequency bug**: The scan time calculation divided the QPC tick delta
+   by a hardcoded `100` instead of using the actual `KeQueryPerformanceCounter`
+   frequency. On a typical 10MHz QPC this gave 10µs units instead of the
+   PTP-required 100µs units (10× too fast). This would cause gesture velocity
+   miscalculations in Windows.
+   - **Fix**: Added `perf_freq` to `DeviceContext`, query frequency in `D0Entry`,
+     compute `delta_100us = delta_ticks * 10_000 / frequency` in `input.rs`.
+   - (The original C driver had the same `/100` pattern — this is a fix over both.)
+
+2. **PtpSelectiveReportingReport struct mismatch**: The Rust struct had an extra
+   `device_mode` field (3 bytes) that doesn't exist in the HID descriptor (which
+   defines 2 bits + 6 padding = 1 data byte, 2 bytes total with report ID). This
+   meant Windows SET_FEATURE for report 0x06 would always fail
+   `STATUS_BUFFER_TOO_SMALL` — selective reporting could never work.
+   - **Fix**: Removed `device_mode` field. Struct is now 2 bytes matching the
+     C driver's `PTP_DEVICE_SELECTIVE_REPORT_MODE_REPORT` and the HID descriptor.
+
+3. **Physical max values wrong in HID descriptor**: Both `get_hid_descriptor()` and
+   `get_report_descriptor()` passed `ptp_x_logical_max()` as the physical max
+   parameter. This told Windows the trackpad was ~76cm × 51cm (the coordinate span)
+   instead of ~16cm × 11.5cm (the actual physical size), breaking DPI calculations
+   and gesture scaling.
+   - **Fix**: Added `x_physical` and `y_physical` fields to `DeviceConfig`, populated
+     from the C driver's per-device HID headers (MT2: 1600×1149, T2: 1300×850).
+     Driver now calls `build_report_descriptor(logical_x, logical_y, physical_x, physical_y)`.
+
+**Test results:** 33 unit tests passing (up from 30).
+
+---
+
+### Phase 5: USB Driver On-Device Testing & Packaging — **MANUAL STEP (YOU)**
+
+> **This phase requires a Windows machine with a Magic Trackpad 2 connected via USB.**
+> It cannot be done in a CI/headless environment. Proceed to Phase 6 (VHF FFI bindings)
+> in the meantime — Phase 5 is not blocking.
+>
+> **MUST-DO CHECKPOINT:** Phase 5 **must be completed before Phase 9** (BT driver
+> testing). Both drivers share `amt-ptp-core`, so any issues found during USB
+> on-device testing could affect the BT driver's input parsing. Ideally, do Phase 5
+> right after Phase 6 or 7, while the USB code is still fresh in memory.
 
 **Goal:** Build on Windows, install on test hardware, verify end-to-end functionality.
 
-**Deliverables:**
-- `cargo wdk build` produces `amt_ptp_usb.sys` + signed `.cat`
-- Testing checklist:
-  - [ ] Driver installs on MT2 USB without errors
-  - [ ] Device Manager shows "Precision Touchpad" device
-  - [ ] Single finger move → cursor moves
-  - [ ] Two-finger scroll, three-finger gestures, pinch-to-zoom
-  - [ ] Physical click + tap-to-click
-  - [ ] Sleep/resume recovery
-  - [ ] Unplug/replug re-enumeration
-- Bug fixes for any issues found during testing
+**Prerequisites:**
+- Windows 11 22H2+ build machine with eWDK, VS2022, LLVM, Rust nightly
+- Apple Magic Trackpad 2 (USB) or a T2 MacBook running Windows via Boot Camp
+- Test-signing enabled (`bcdedit /set testsigning on`)
+
+**Build steps:**
+```powershell
+cargo wdk build --release -p amt-ptp-usb
+# Output: target/<arch>/release/amt_ptp_usb.sys + amt_ptp_usb.cat
+```
+
+**Testing checklist:**
+- [ ] `cargo wdk build` produces `amt_ptp_usb.sys` + signed `.cat` without errors
+- [ ] Driver installs on MT2 USB without errors (Device Manager → Update Driver)
+- [ ] Device Manager shows "Apple USB Precision Touchpad Device" under HID
+- [ ] Single finger move → cursor moves smoothly
+- [ ] Two-finger scroll works (vertical and horizontal)
+- [ ] Three-finger gestures work (task view, desktop switch)
+- [ ] Pinch-to-zoom works
+- [ ] Physical click works
+- [ ] Tap-to-click works (if enabled in Windows Settings)
+- [ ] Sleep → resume: cursor moves after wake, no BSOD
+- [ ] Unplug → replug: device re-enumerates, cursor works
+- [ ] No Driver Verifier violations (run with DV enabled)
+
+**If issues are found:** Fix them and re-run the checklist. Document any additional
+device-specific quirks discovered during testing.
 
 ---
 

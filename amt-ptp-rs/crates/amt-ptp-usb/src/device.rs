@@ -46,6 +46,8 @@ pub struct DeviceContext {
     pub ptp_report_button: bool,
 
     // ── Timing ──────────────────────────────────────────────────
+    /// Performance counter frequency (ticks per second), for scan time conversion.
+    pub perf_freq: i64,
     /// Performance counter value at the last report, for scan time calculation.
     pub last_report_time: i64,
 }
@@ -72,6 +74,7 @@ impl DeviceContext {
         self.ptp_input_on = false;
         self.ptp_report_touch = true; // enabled by default
         self.ptp_report_button = true; // enabled by default
+        self.perf_freq = 0;
         self.last_report_time = 0;
     }
 }

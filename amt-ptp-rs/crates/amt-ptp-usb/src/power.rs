@@ -31,12 +31,12 @@ pub unsafe extern "C" fn evt_device_d0_entry(
         }
     }
 
-    // Record initial timestamp for scan time calculation
-    // SAFETY: KeQueryPerformanceCounter is always safe to call
-    let mut counter: LARGE_INTEGER = unsafe { core::mem::zeroed() };
-    unsafe {
-        counter = KeQueryPerformanceCounter(core::ptr::null_mut());
-    }
+    // Record initial timestamp and frequency for scan time calculation.
+    // The frequency is needed to convert tick deltas to 100µs PTP scan time units.
+    // SAFETY: KeQueryPerformanceCounter is always safe to call.
+    let mut freq: LARGE_INTEGER = unsafe { core::mem::zeroed() };
+    let counter = unsafe { KeQueryPerformanceCounter(&mut freq) };
+    ctx.perf_freq = unsafe { *freq.QuadPart() };
     ctx.last_report_time = unsafe { *counter.QuadPart() };
 
     // Start the continuous reader on the interrupt pipe

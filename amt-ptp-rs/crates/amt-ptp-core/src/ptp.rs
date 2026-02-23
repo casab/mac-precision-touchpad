@@ -152,14 +152,13 @@ pub struct PtpInputModeReport {
 /// Selective reporting feature report (Report ID 0x06).
 ///
 /// Controls which sub-reports are active (button and/or surface).
+/// Matches the HID descriptor: 2 switch bits + 6 padding bits = 1 byte of data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct PtpSelectiveReportingReport {
     /// Report ID: [`REPORTID_FUNC_SWITCH`] (0x06).
     pub report_id: u8,
-    /// Device mode byte (used by some implementations).
-    pub device_mode: u8,
-    /// Bit 0: button report enabled, Bit 1: surface report enabled.
+    /// Bit 0: button report enabled, Bit 1: surface report enabled, Bits 2-7: padding.
     pub switches: u8,
 }
 
@@ -262,10 +261,15 @@ mod tests {
     }
 
     #[test]
+    fn selective_reporting_report_size() {
+        // 1 (report_id) + 1 (switches) = 2
+        assert_eq!(mem::size_of::<PtpSelectiveReportingReport>(), 2);
+    }
+
+    #[test]
     fn selective_reporting_flags() {
         let r = PtpSelectiveReportingReport {
             report_id: REPORTID_FUNC_SWITCH,
-            device_mode: 0,
             switches: 0x03, // both button and surface
         };
         assert!(r.button_report_on());

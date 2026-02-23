@@ -83,15 +83,18 @@ pub unsafe extern "C" fn evt_usb_interrupt_pipe_read_complete(
 
     // ── Calculate scan time ──────────────────────────────────────────
     //
-    // Scan time is reported in 100µs units. We compute the delta between
-    // the current performance counter and the last report's timestamp,
-    // then divide by 100 to convert from ticks to 100µs units.
-    let mut perf_counter: LARGE_INTEGER = unsafe { core::mem::zeroed() };
-    unsafe {
-        perf_counter = KeQueryPerformanceCounter(core::ptr::null_mut());
-    }
+    // PTP scan time is in 100µs units. Convert tick delta using the QPC frequency:
+    //   delta_100us = delta_ticks * 10_000 / frequency
+    // where 10_000 = 1_000_000µs / 100µs (conversions per second of 100µs slots).
+    let perf_counter = unsafe { KeQueryPerformanceCounter(core::ptr::null_mut()) };
     let current_time = unsafe { *perf_counter.QuadPart() };
-    let delta = (current_time - ctx.last_report_time) / 100;
+    let delta_ticks = current_time - ctx.last_report_time;
+    let delta = if ctx.perf_freq > 0 {
+        delta_ticks * 10_000 / ctx.perf_freq
+    } else {
+        // Fallback: assume ~10MHz QPC (common on Windows 10+)
+        delta_ticks / 1000
+    };
     let scan_time = if delta > 0xFFFF { 0xFFFF } else { delta as u16 };
     ctx.last_report_time = current_time;
 

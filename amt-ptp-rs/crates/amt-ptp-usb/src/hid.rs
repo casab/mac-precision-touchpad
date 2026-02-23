@@ -75,8 +75,8 @@ pub unsafe fn get_hid_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> NTST
     let report_desc = build_report_descriptor(
         config.ptp_x_logical_max(),
         config.ptp_y_logical_max(),
-        config.ptp_x_logical_max(),
-        config.ptp_y_logical_max(),
+        config.ptp_x_physical_max(),
+        config.ptp_y_physical_max(),
     );
 
     let descriptor = HidDescriptor {
@@ -188,8 +188,8 @@ pub unsafe fn get_report_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> N
     let report_desc = build_report_descriptor(
         config.ptp_x_logical_max(),
         config.ptp_y_logical_max(),
-        config.ptp_x_logical_max(),
-        config.ptp_y_logical_max(),
+        config.ptp_x_physical_max(),
+        config.ptp_y_physical_max(),
     );
 
     let mut memory: WDFMEMORY = core::ptr::null_mut();

@@ -197,6 +197,11 @@ pub struct DeviceConfig {
     pub y: AxisParams,
     /// Orientation limits.
     pub orientation: AxisParams,
+    /// Physical X dimension in 0.01cm units (for HID descriptor PHYSICAL_MAXIMUM).
+    /// From the original C driver's per-device HID descriptor headers.
+    pub x_physical: u16,
+    /// Physical Y dimension in 0.01cm units (for HID descriptor PHYSICAL_MAXIMUM).
+    pub y_physical: u16,
 }
 
 impl DeviceConfig {
@@ -216,6 +221,18 @@ impl DeviceConfig {
     #[must_use]
     pub const fn ptp_y_logical_max(&self) -> u16 {
         (self.y.max - self.y.min) as u16
+    }
+
+    /// Physical X maximum in 0.01cm units for HID descriptor.
+    #[must_use]
+    pub const fn ptp_x_physical_max(&self) -> u16 {
+        self.x_physical
+    }
+
+    /// Physical Y maximum in 0.01cm units for HID descriptor.
+    #[must_use]
+    pub const fn ptp_y_physical_max(&self) -> u16 {
+        self.y_physical
     }
 }
 
@@ -240,6 +257,8 @@ pub static CONFIG_TABLE: &[DeviceConfig] = &[
         x: AxisParams { sn_ratio: SN_COORD, min: -10000, max: 10000 },
         y: AxisParams { sn_ratio: SN_COORD, min: -2000, max: 10000 },
         orientation: AxisParams { sn_ratio: SN_ORIENT, min: -MAX_FINGER_ORIENTATION, max: MAX_FINGER_ORIENTATION },
+        x_physical: 1300, // 13.00cm — safe default matching T2 13" (from WellspringT2.h)
+        y_physical: 850,  //  8.50cm — safe default matching T2 13" (from WellspringT2.h)
     },
     // MacBook Pro 13″ 2018 (T2)
     DeviceConfig {
@@ -255,6 +274,8 @@ pub static CONFIG_TABLE: &[DeviceConfig] = &[
         x: AxisParams { sn_ratio: SN_COORD, min: -6243, max: 6749 },
         y: AxisParams { sn_ratio: SN_COORD, min: -170, max: 7685 },
         orientation: AxisParams { sn_ratio: SN_ORIENT, min: -MAX_FINGER_ORIENTATION, max: MAX_FINGER_ORIENTATION },
+        x_physical: 1300, // 13.00cm (from WellspringT2.h: PHYSICAL_MAXIMUM 0x0514)
+        y_physical: 850,  //  8.50cm (from WellspringT2.h: PHYSICAL_MAXIMUM 0x0352)
     },
     // MacBook Pro 13″ 2019 (T2)
     DeviceConfig {
@@ -270,6 +291,8 @@ pub static CONFIG_TABLE: &[DeviceConfig] = &[
         x: AxisParams { sn_ratio: SN_COORD, min: -6243, max: 6749 },
         y: AxisParams { sn_ratio: SN_COORD, min: -170, max: 7685 },
         orientation: AxisParams { sn_ratio: SN_ORIENT, min: -MAX_FINGER_ORIENTATION, max: MAX_FINGER_ORIENTATION },
+        x_physical: 1300,
+        y_physical: 850,
     },
     // MacBook Pro 15″ 2018 (T2, oversampled)
     DeviceConfig {
@@ -285,6 +308,8 @@ pub static CONFIG_TABLE: &[DeviceConfig] = &[
         x: AxisParams { sn_ratio: SN_COORD, min: -10000, max: 10000 },
         y: AxisParams { sn_ratio: SN_COORD, min: -2000, max: 10000 },
         orientation: AxisParams { sn_ratio: SN_ORIENT, min: -MAX_FINGER_ORIENTATION, max: MAX_FINGER_ORIENTATION },
+        x_physical: 1300, // Use T2 default; 15" uses larger sensor but same firmware class
+        y_physical: 850,
     },
     // MacBook Pro 15″ 2019 (T2, oversampled)
     DeviceConfig {
@@ -300,6 +325,8 @@ pub static CONFIG_TABLE: &[DeviceConfig] = &[
         x: AxisParams { sn_ratio: SN_COORD, min: -10000, max: 10000 },
         y: AxisParams { sn_ratio: SN_COORD, min: -2000, max: 10000 },
         orientation: AxisParams { sn_ratio: SN_ORIENT, min: -MAX_FINGER_ORIENTATION, max: MAX_FINGER_ORIENTATION },
+        x_physical: 1300,
+        y_physical: 850,
     },
     // Magic Trackpad 2 (USB and BT, TYPE5)
     DeviceConfig {
@@ -315,6 +342,8 @@ pub static CONFIG_TABLE: &[DeviceConfig] = &[
         x: AxisParams { sn_ratio: SN_COORD, min: -3678, max: 3934 },
         y: AxisParams { sn_ratio: SN_COORD, min: -2479, max: 2586 },
         orientation: AxisParams { sn_ratio: SN_ORIENT, min: -MAX_FINGER_ORIENTATION, max: MAX_FINGER_ORIENTATION },
+        x_physical: 1600, // 16.00cm (from WellspringMt2.h: PHYSICAL_MAXIMUM 0x0640)
+        y_physical: 1149, // 11.49cm (from WellspringMt2.h: PHYSICAL_MAXIMUM 0x047D)
     },
 ];
 
@@ -369,6 +398,22 @@ mod tests {
         assert_eq!(cfg.ptp_x_logical_max(), 7612);
         // Y span: 2586 - (-2479) = 5065
         assert_eq!(cfg.ptp_y_logical_max(), 5065);
+    }
+
+    #[test]
+    fn ptp_physical_max_mt2() {
+        let cfg = lookup_config(PID_MAGIC_TRACKPAD2);
+        // From WellspringMt2.h: 1600 (16.00cm) × 1149 (11.49cm)
+        assert_eq!(cfg.ptp_x_physical_max(), 1600);
+        assert_eq!(cfg.ptp_y_physical_max(), 1149);
+    }
+
+    #[test]
+    fn ptp_physical_max_t2() {
+        let cfg = lookup_config(PID_T2_7A);
+        // From WellspringT2.h: 1300 (13.00cm) × 850 (8.50cm)
+        assert_eq!(cfg.ptp_x_physical_max(), 1300);
+        assert_eq!(cfg.ptp_y_physical_max(), 850);
     }
 
     #[test]
