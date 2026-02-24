@@ -177,11 +177,15 @@ pub unsafe extern "C" fn evt_self_managed_io_restart(device: WDFDEVICE) -> NTSTA
 
     // Restart the I/O target (stopped during suspend)
     if !ctx.hid_io_target.is_null() {
-        unsafe {
+        let status = unsafe {
             call_unsafe_wdf_function_binding!(
                 WdfIoTargetStart,
                 ctx.hid_io_target
-            );
+            )
+        };
+        if !NT_SUCCESS(status) {
+            println!("SelfManagedIoRestart: WdfIoTargetStart failed: {status:#x}");
+            return status;
         }
     }
 

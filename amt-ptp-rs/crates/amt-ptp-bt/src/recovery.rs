@@ -120,7 +120,7 @@ pub unsafe fn stop_recovery_timer(ctx: &crate::device::DeviceContext) {
             call_unsafe_wdf_function_binding!(
                 WdfTimerStop,
                 ctx.recovery_timer,
-                FALSE as BOOLEAN // Don't wait
+                TRUE as BOOLEAN // Wait for timer callback to complete
             );
         }
     }

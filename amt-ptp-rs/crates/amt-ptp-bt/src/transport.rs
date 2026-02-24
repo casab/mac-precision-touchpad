@@ -72,14 +72,15 @@ pub unsafe fn init_transport(device: WDFDEVICE) -> NTSTATUS {
 ///
 /// I/O target must be initialized (call after `init_transport`).
 pub unsafe fn query_device_attributes(ctx: &mut DeviceContext) -> NTSTATUS {
-    // HID_DEVICE_ATTRIBUTES: Size (ULONG) + VendorID (USHORT) + ProductID (USHORT) + VersionNumber (USHORT)
-    // Total = 4 + 2 + 2 + 2 = 10 bytes, but the struct has Size as first field
+    // HID_DEVICE_ATTRIBUTES from hidpi.h: Size + VendorID + ProductID + VersionNumber + Reserved[11]
+    // Total = 4 + 2 + 2 + 2 + 22 = 32 bytes
     #[repr(C)]
     struct HidDeviceAttributes {
         size: u32,
         vendor_id: u16,
         product_id: u16,
         version_number: u16,
+        reserved: [u16; 11],
     }
 
     let mut attrs: HidDeviceAttributes = unsafe { core::mem::zeroed() };
