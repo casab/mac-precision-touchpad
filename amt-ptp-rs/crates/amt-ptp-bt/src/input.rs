@@ -159,13 +159,16 @@ pub unsafe extern "C" fn evt_bt_read_complete(
         }
     };
 
+    // Defense-in-depth: clamp count to PTP max even though parse_report already does
+    let count = count.min(PTP_MAX_CONTACT_POINTS);
+
     // ── Calculate scan time ──────────────────────────────────────────
     // PTP scan time is in 100µs units.
     let perf_counter = unsafe { KeQueryPerformanceCounter(core::ptr::null_mut()) };
     let current_time = unsafe { *perf_counter.QuadPart() };
-    let delta_ticks = current_time - ctx.last_report_time;
+    let delta_ticks = (current_time - ctx.last_report_time).max(0);
     let delta = if ctx.perf_freq > 0 {
-        delta_ticks * 10_000 / ctx.perf_freq
+        delta_ticks.saturating_mul(10_000) / ctx.perf_freq
     } else {
         delta_ticks / 1000
     };
