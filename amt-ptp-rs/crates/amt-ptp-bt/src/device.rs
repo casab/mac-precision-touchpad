@@ -16,6 +16,14 @@ use wdk_sys::*;
 use amt_ptp_core::device::DeviceConfig;
 use vhf_sys::VHFHANDLE;
 
+// Compile-time check: Option<&DeviceConfig> must be pointer-sized for repr(C) layout.
+// Rust guarantees this for Option<&T> (nullable pointer optimization), but a static
+// assert protects against any hypothetical future change.
+const _: () = assert!(
+    core::mem::size_of::<Option<&DeviceConfig>>() == core::mem::size_of::<*const DeviceConfig>(),
+    "Option<&DeviceConfig> must be pointer-sized for repr(C) DeviceContext"
+);
+
 /// Per-device context for the BT HID filter driver.
 ///
 /// Stored in the WDF device object via `WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE`.
