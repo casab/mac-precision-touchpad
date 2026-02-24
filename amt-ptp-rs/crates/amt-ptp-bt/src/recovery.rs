@@ -142,8 +142,8 @@ unsafe extern "C" fn evt_recovery_timer(timer: WDFTIMER) {
     };
     let ctx = unsafe { &mut *get_device_context(device) };
 
-    // Don't recover if device is shutting down
-    if ctx.hid_io_target.is_null() {
+    // Don't recover if device is shutting down or suspended
+    if ctx.hid_io_target.is_null() || !ctx.device_configured {
         return;
     }
 

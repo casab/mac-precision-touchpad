@@ -224,6 +224,7 @@ pub unsafe extern "C" fn evt_self_managed_io_suspend(device: WDFDEVICE) -> NTSTA
 
     // Mark device as not configured first to prevent read resubmission
     ctx.device_configured = false;
+    ctx.vhf_ready = false;
 
     // Stop the recovery timer if running
     unsafe { recovery::stop_recovery_timer(ctx) };
@@ -255,11 +256,14 @@ pub unsafe extern "C" fn evt_self_managed_io_suspend(device: WDFDEVICE) -> NTSTA
 pub unsafe extern "C" fn evt_self_managed_io_cleanup(device: WDFDEVICE) {
     let ctx = unsafe { &mut *get_device_context(device) };
 
-    // Delete the VHF device, blocking until all pending operations complete
+    // Delete the VHF device, blocking until all pending operations complete.
+    // Null the handle first so concurrent paths (input completion, VHF callbacks)
+    // see it as gone before the blocking VhfDelete returns.
     if !ctx.vhf_handle.is_null() {
         println!("SelfManagedIoCleanup: deleting VHF device");
-        unsafe { vhf_device::vhf_delete(ctx.vhf_handle, true) };
+        let handle = ctx.vhf_handle;
         ctx.vhf_handle = core::ptr::null_mut();
+        unsafe { vhf_device::vhf_delete(handle, true) };
     }
 
     ctx.device_configured = false;
