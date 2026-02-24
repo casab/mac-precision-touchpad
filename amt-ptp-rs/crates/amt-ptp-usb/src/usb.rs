@@ -52,10 +52,11 @@ pub unsafe fn prepare_usb_hardware(device: WDFDEVICE) -> NTSTATUS {
 
     // 3. Look up device config by product ID
     let product_id = ctx.device_descriptor.idProduct;
-    ctx.device_info = Some(lookup_config(product_id));
+    let config = lookup_config(product_id);
+    ctx.device_info = Some(config);
     println!(
         "Apple trackpad detected: PID={product_id:#06x}, type={:?}",
-        ctx.device_info.unwrap().trackpad_type
+        config.trackpad_type
     );
 
     // 4. Retrieve USB device information (traits)
