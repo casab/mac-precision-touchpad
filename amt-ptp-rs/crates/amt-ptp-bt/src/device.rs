@@ -9,7 +9,7 @@
 //! communicates with the underlying BT HID device.
 
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 
 use wdk_sys::*;
 

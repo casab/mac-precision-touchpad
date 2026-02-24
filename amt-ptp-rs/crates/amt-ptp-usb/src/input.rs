@@ -37,7 +37,8 @@ pub unsafe extern "C" fn evt_usb_interrupt_pipe_read_complete(
     context: WDFCONTEXT,
 ) {
     let device: WDFDEVICE = context.cast();
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     let config = match unsafe { (*ctx).device_info } {
         Some(c) => c,

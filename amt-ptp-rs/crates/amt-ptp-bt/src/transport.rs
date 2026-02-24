@@ -32,7 +32,8 @@ const BT_POOL_TAG: u32 = u32::from_le_bytes(*b"apbt");
 ///
 /// Device must be a valid WDFDEVICE with an initialized DeviceContext.
 pub unsafe fn init_transport(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // Get the default I/O target (lower device in filter stack)
     unsafe {
@@ -267,7 +268,8 @@ pub unsafe fn activate_multitouch(ctx: &mut DeviceContext) -> NTSTATUS {
 ///
 /// I/O target and lookaside list must be initialized. Device must be configured.
 pub unsafe fn issue_read_request(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     if !unsafe { (*ctx).device_configured.load(core::sync::atomic::Ordering::Relaxed) }
         || unsafe { (*ctx).hid_io_target.is_null() }

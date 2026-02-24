@@ -22,7 +22,8 @@ pub unsafe extern "C" fn evt_device_d0_entry(
     device: WDFDEVICE,
     _previous_state: WDF_POWER_DEVICE_STATE,
 ) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // Enable Wellspring mode if reporting is requested
     if unsafe { (*ctx).ptp_report_button.load(Ordering::Relaxed) }
@@ -86,7 +87,8 @@ pub unsafe extern "C" fn evt_device_d0_exit(
     device: WDFDEVICE,
     _target_state: WDF_POWER_DEVICE_STATE,
 ) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // Stop the interrupt pipe I/O target
     if !unsafe { (*ctx).interrupt_pipe.is_null() } {

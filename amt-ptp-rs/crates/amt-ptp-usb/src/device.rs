@@ -3,7 +3,7 @@
 //! The device context holds all per-device state: USB handles, device config,
 //! Wellspring mode state, PTP reporting flags, and timing.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 
 use wdk_sys::*;
 
@@ -76,7 +76,8 @@ impl DeviceContext {
         self.usb_device = core::ptr::null_mut();
         self.interrupt_pipe = core::ptr::null_mut();
         self.usb_interface = core::ptr::null_mut();
-        self.device_descriptor = core::mem::zeroed();
+        // SAFETY: USB_DEVICE_DESCRIPTOR is a plain C struct, safe to zero-init
+        self.device_descriptor = unsafe { core::mem::zeroed() };
         self.usb_device_traits = 0;
         self.input_queue = core::ptr::null_mut();
         self.device_info = None;

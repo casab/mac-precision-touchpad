@@ -67,7 +67,8 @@ struct HidXferPacket {
 ///
 /// Request must be valid with a sufficiently large output buffer.
 pub unsafe fn get_hid_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
     let config = match unsafe { (*ctx).device_info } {
         Some(c) => c,
         None => return STATUS_DEVICE_NOT_READY,
@@ -136,7 +137,8 @@ pub unsafe fn get_hid_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> NTST
 ///
 /// Request must be valid with a sufficiently large output buffer.
 pub unsafe fn get_device_attributes(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     let mut buffer: *mut core::ffi::c_void = core::ptr::null_mut();
     let mut buffer_len: usize = 0;
@@ -181,7 +183,8 @@ pub unsafe fn get_device_attributes(device: WDFDEVICE, request: WDFREQUEST) -> N
 ///
 /// Request must be valid with a sufficiently large output buffer.
 pub unsafe fn get_report_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
     let config = match unsafe { (*ctx).device_info } {
         Some(c) => c,
         None => return STATUS_DEVICE_NOT_READY,
@@ -326,7 +329,8 @@ pub unsafe fn get_feature(_device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
 ///
 /// Request IRP `UserBuffer` must contain a valid `HID_XFER_PACKET`.
 pub unsafe fn set_feature(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     let irp = unsafe {
         call_unsafe_wdf_function_binding!(WdfRequestWdmGetIrp, request)

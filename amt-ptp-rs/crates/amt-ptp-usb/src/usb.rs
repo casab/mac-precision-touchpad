@@ -23,7 +23,7 @@ use amt_ptp_core::device::lookup_config;
 /// and stored in the device context.
 pub unsafe fn prepare_usb_hardware(device: WDFDEVICE) -> NTSTATUS {
     // SAFETY: device was created with DeviceContext
-    let ctx = get_device_context(device);
+    let ctx = unsafe { get_device_context(device) };
 
     // 1. Create USB device handle (first time only)
     if unsafe { (*ctx).usb_device.is_null() } {
@@ -96,7 +96,8 @@ pub unsafe fn prepare_usb_hardware(device: WDFDEVICE) -> NTSTATUS {
 ///
 /// USB device must be created and stored in the device context.
 unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // Select single interface configuration
     let mut config_params: WDF_USB_DEVICE_SELECT_CONFIG_PARAMS = unsafe { core::mem::zeroed() };
@@ -171,7 +172,8 @@ unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
 ///
 /// Interrupt pipe must be selected and stored in the device context.
 unsafe fn configure_continuous_reader(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
     let config = match unsafe { (*ctx).device_info } {
         Some(c) => c,
         None => return STATUS_DEVICE_NOT_READY,

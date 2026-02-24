@@ -141,7 +141,8 @@ unsafe extern "C" fn evt_driver_device_add(
     }
 
     // Initialize device context with safe defaults
-    let ctx = get_device_context(device);
+    // SAFETY: device was just created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
     unsafe { (*ctx).init_defaults() };
 
     // Create I/O queues (default parallel + manual input)

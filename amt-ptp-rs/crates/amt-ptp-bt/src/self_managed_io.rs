@@ -48,7 +48,8 @@ use crate::vhf_device;
 /// Called by WDF with a valid device handle. The device must have been
 /// created with a [`DeviceContext`](crate::device::DeviceContext).
 pub unsafe extern "C" fn evt_self_managed_io_init(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     println!("SelfManagedIoInit: initializing BT transport and VHF device");
 
@@ -177,7 +178,8 @@ pub unsafe extern "C" fn evt_self_managed_io_init(device: WDFDEVICE) -> NTSTATUS
 ///
 /// Called by WDF with a valid device handle.
 pub unsafe extern "C" fn evt_self_managed_io_restart(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // Record fresh timestamp for scan time calculation
     let mut freq: LARGE_INTEGER = unsafe { core::mem::zeroed() };
@@ -234,7 +236,8 @@ pub unsafe extern "C" fn evt_self_managed_io_restart(device: WDFDEVICE) -> NTSTA
 ///
 /// Called by WDF with a valid device handle.
 pub unsafe extern "C" fn evt_self_managed_io_suspend(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // Mark device as not configured first to prevent read resubmission
     unsafe {
@@ -270,7 +273,8 @@ pub unsafe extern "C" fn evt_self_managed_io_suspend(device: WDFDEVICE) -> NTSTA
 /// Called by WDF with a valid device handle. After this call, the
 /// VHF handle is invalid.
 pub unsafe extern "C" fn evt_self_managed_io_cleanup(device: WDFDEVICE) {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // Delete the VHF device, blocking until all pending operations complete.
     // Null the handle first so concurrent paths (input completion, VHF callbacks)

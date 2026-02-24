@@ -35,7 +35,8 @@ const MAX_RECOVERY_ATTEMPTS: u32 = 10;
 ///
 /// Device must be a valid WDFDEVICE with an initialized DeviceContext.
 pub unsafe fn create_recovery_objects(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // ── Recovery Timer ───────────────────────────────────────────
     let mut timer_config: WDF_TIMER_CONFIG = unsafe { core::mem::zeroed() };
@@ -119,7 +120,8 @@ unsafe extern "C" fn evt_recovery_timer(timer: WDFTIMER) {
     let device: WDFDEVICE = unsafe {
         call_unsafe_wdf_function_binding!(WdfTimerGetParentObject, timer)
     };
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // Don't recover if device is shutting down or suspended
     if unsafe { (*ctx).hid_io_target.is_null() }

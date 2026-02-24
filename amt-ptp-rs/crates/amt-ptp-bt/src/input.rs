@@ -49,7 +49,8 @@ pub unsafe extern "C" fn evt_bt_read_complete(
     context: WDFCONTEXT,
 ) {
     let device: WDFDEVICE = context.cast();
-    let ctx = get_device_context(device);
+    // SAFETY: device was created with DeviceContext
+    let ctx = unsafe { get_device_context(device) };
 
     // Check request completion status
     let status = unsafe {
