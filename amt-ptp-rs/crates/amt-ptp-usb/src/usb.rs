@@ -241,7 +241,7 @@ pub unsafe fn set_wellspring_mode(ctx: &mut DeviceContext, enable: bool) -> NTST
         call_unsafe_wdf_function_binding!(
             WdfMemoryCreate,
             WDF_NO_OBJECT_ATTRIBUTES,
-            PagedPool as u32,
+            PagedPool,
             u32::from_le_bytes(*b"aptp"),  // pool tag
             buf_size,
             &mut buf_handle,

@@ -68,7 +68,7 @@ pub unsafe fn init_transport(device: WDFDEVICE) -> NTSTATUS {
             WdfLookasideListCreate,
             WDF_NO_OBJECT_ATTRIBUTES,
             REPORT_BUFFER_SIZE,
-            NonPagedPoolNx as u32,
+            NonPagedPoolNx,
             WDF_NO_OBJECT_ATTRIBUTES,
             BT_POOL_TAG,
             &mut (*ctx).hid_read_buffer_lookaside
@@ -193,7 +193,7 @@ pub unsafe fn activate_multitouch(ctx: &mut DeviceContext) -> NTSTATUS {
         call_unsafe_wdf_function_binding!(
             WdfMemoryCreate,
             &mut input_attrs,
-            NonPagedPoolNx as u32,
+            NonPagedPoolNx,
             BT_POOL_TAG,
             xfer_size,
             &mut input_mem,
