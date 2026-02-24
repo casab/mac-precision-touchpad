@@ -117,12 +117,10 @@ unsafe extern "C" fn evt_driver_device_add(
     // Prepare device object attributes with DeviceContext
     let mut device_attrs: WDF_OBJECT_ATTRIBUTES = unsafe { core::mem::zeroed() };
     device_attrs.Size = core::mem::size_of::<WDF_OBJECT_ATTRIBUTES>() as ULONG;
-    device_attrs.ExecutionLevel =
-        WDF_EXECUTION_LEVEL::WdfExecutionLevelInheritFromParent;
-    device_attrs.SynchronizationScope =
-        WDF_SYNCHRONIZATION_SCOPE::WdfSynchronizationScopeInheritFromParent;
+    device_attrs.ExecutionLevel = WdfExecutionLevelInheritFromParent;
+    device_attrs.SynchronizationScope = WdfSynchronizationScopeInheritFromParent;
     device_attrs.ContextTypeInfo =
-        &DEVICE_CONTEXT_TYPE_INFO as *const WDF_OBJECT_CONTEXT_TYPE_INFO;
+        &DEVICE_CONTEXT_TYPE_INFO.0 as *const WDF_OBJECT_CONTEXT_TYPE_INFO;
     device_attrs.ContextSizeOverride = core::mem::size_of::<device::DeviceContext>();
 
     // Create the WDF device object

@@ -8,6 +8,7 @@
 
 use core::sync::atomic::Ordering;
 
+use wdk_sys::ntddk::KeQueryPerformanceCounter;
 use wdk_sys::*;
 
 use crate::device::get_device_context;
@@ -93,7 +94,7 @@ pub unsafe extern "C" fn evt_usb_interrupt_pipe_read_complete(
     //   delta_100us = delta_ticks * 10_000 / frequency
     // where 10_000 = 1_000_000µs / 100µs (conversions per second of 100µs slots).
     let perf_counter = unsafe { KeQueryPerformanceCounter(core::ptr::null_mut()) };
-    let current_time = unsafe { *perf_counter.QuadPart() };
+    let current_time = unsafe { perf_counter.QuadPart };
     let delta_ticks = (current_time - unsafe { (*ctx).last_report_time }).max(0);
     let delta = if unsafe { (*ctx).perf_freq } > 0 {
         delta_ticks.saturating_mul(10_000) / unsafe { (*ctx).perf_freq }
@@ -162,7 +163,7 @@ pub unsafe extern "C" fn evt_usb_interrupt_pipe_read_complete(
             WdfMemoryCopyFromBuffer,
             request_memory,
             0,
-            report_bytes.as_ptr() as *const core::ffi::c_void,
+            report_bytes.as_ptr() as *mut core::ffi::c_void,
             report_bytes.len()
         )
     };

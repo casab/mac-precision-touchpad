@@ -90,9 +90,21 @@ impl DeviceContext {
     }
 }
 
-// WDF context type accessor macro equivalent.
-// In the C driver this is `WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DEVICE_CONTEXT, DeviceGetContext)`.
-// With wdk-sys we use `wdf_device_context!` or manual implementation.
+// ── Sync wrapper for WDF context type info ────────────────────────────
+//
+// WDF_OBJECT_CONTEXT_TYPE_INFO contains raw pointers (*const i8 for ContextName,
+// *const Self for UniqueType) which don't implement Sync. We use a newtype
+// wrapper to provide the Sync impl needed for a `static`.
+
+/// Wrapper to allow `WDF_OBJECT_CONTEXT_TYPE_INFO` in a `static`.
+#[repr(transparent)]
+pub struct SyncContextTypeInfo(pub WDF_OBJECT_CONTEXT_TYPE_INFO);
+
+// SAFETY: WDF_OBJECT_CONTEXT_TYPE_INFO is read-only after initialization.
+// It contains raw pointers to static data (string literals and null) and
+// an Option<fn> callback. WDF accesses this from any thread context,
+// matching the behavior of the C driver's WDF_DECLARE_CONTEXT_TYPE.
+unsafe impl Sync for SyncContextTypeInfo {}
 
 /// Get the device context from a WDFDEVICE handle.
 ///
@@ -101,13 +113,14 @@ impl DeviceContext {
 /// The device must have been created with a context of type [`DeviceContext`].
 /// The returned pointer is valid for the lifetime of the device object.
 pub unsafe fn get_device_context(device: WDFDEVICE) -> *mut DeviceContext {
-    // SAFETY: WdfObjectGetTypedContext returns the context pointer that was
+    // SAFETY: WdfObjectGetTypedContextWorker returns the context pointer that was
     // allocated alongside the device object. The type and size were set during
     // WdfDeviceCreate via WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE.
     unsafe {
-        WdfObjectGetTypedContext(
+        call_unsafe_wdf_function_binding!(
+            WdfObjectGetTypedContextWorker,
             device.cast(),
-            &DEVICE_CONTEXT_TYPE_INFO as *const WDF_OBJECT_CONTEXT_TYPE_INFO,
+            &DEVICE_CONTEXT_TYPE_INFO.0 as *const WDF_OBJECT_CONTEXT_TYPE_INFO,
         )
         .cast::<DeviceContext>()
     }
@@ -118,11 +131,11 @@ pub unsafe fn get_device_context(device: WDFDEVICE) -> *mut DeviceContext {
 /// This is the static type descriptor that WDF uses to track context size
 /// and type. It's the equivalent of what `WDF_DECLARE_CONTEXT_TYPE` generates.
 #[used]
-pub static DEVICE_CONTEXT_TYPE_INFO: WDF_OBJECT_CONTEXT_TYPE_INFO =
-    WDF_OBJECT_CONTEXT_TYPE_INFO {
+pub static DEVICE_CONTEXT_TYPE_INFO: SyncContextTypeInfo =
+    SyncContextTypeInfo(WDF_OBJECT_CONTEXT_TYPE_INFO {
         Size: core::mem::size_of::<WDF_OBJECT_CONTEXT_TYPE_INFO>() as ULONG,
         ContextName: b"DeviceContext\0".as_ptr().cast(),
         ContextSize: core::mem::size_of::<DeviceContext>(),
         UniqueType: core::ptr::null(),
         EvtDriverGetUniqueContextType: None,
-    };
+    });

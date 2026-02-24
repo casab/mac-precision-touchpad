@@ -17,6 +17,7 @@ extern crate alloc;
 use core::sync::atomic::Ordering;
 
 use wdk::println;
+use wdk_sys::ntddk::KeQueryPerformanceCounter;
 use wdk_sys::*;
 
 use amt_ptp_core::constants::*;
@@ -137,8 +138,8 @@ pub unsafe extern "C" fn evt_self_managed_io_init(device: WDFDEVICE) -> NTSTATUS
     let mut freq: LARGE_INTEGER = unsafe { core::mem::zeroed() };
     let counter = unsafe { KeQueryPerformanceCounter(&mut freq) };
     unsafe {
-        (*ctx).perf_freq = *freq.QuadPart();
-        (*ctx).last_report_time = *counter.QuadPart();
+        (*ctx).perf_freq = freq.QuadPart;
+        (*ctx).last_report_time = counter.QuadPart;
     }
 
     // Activate multitouch mode on the BT trackpad (report 0xF1)
@@ -185,8 +186,8 @@ pub unsafe extern "C" fn evt_self_managed_io_restart(device: WDFDEVICE) -> NTSTA
     let mut freq: LARGE_INTEGER = unsafe { core::mem::zeroed() };
     let counter = unsafe { KeQueryPerformanceCounter(&mut freq) };
     unsafe {
-        (*ctx).perf_freq = *freq.QuadPart();
-        (*ctx).last_report_time = *counter.QuadPart();
+        (*ctx).perf_freq = freq.QuadPart;
+        (*ctx).last_report_time = counter.QuadPart;
     }
 
     // Restart the I/O target (stopped during suspend)
@@ -255,7 +256,7 @@ pub unsafe extern "C" fn evt_self_managed_io_suspend(device: WDFDEVICE) -> NTSTA
             call_unsafe_wdf_function_binding!(
                 WdfIoTargetStop,
                 (*ctx).hid_io_target,
-                WDF_IO_TARGET_SENT_IO_ACTION::WdfIoTargetCancelSentIo
+                WdfIoTargetCancelSentIo
             );
         }
     }

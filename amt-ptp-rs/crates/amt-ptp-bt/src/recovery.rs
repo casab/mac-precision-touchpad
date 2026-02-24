@@ -15,6 +15,7 @@
 use core::sync::atomic::Ordering;
 
 use wdk::println;
+use wdk_sys::ntddk::KeQueryPerformanceCounter;
 use wdk_sys::*;
 
 use crate::device::get_device_context;
@@ -47,7 +48,7 @@ pub unsafe fn create_recovery_objects(device: WDFDEVICE) -> NTSTATUS {
     let mut timer_attrs: WDF_OBJECT_ATTRIBUTES = unsafe { core::mem::zeroed() };
     timer_attrs.Size = core::mem::size_of::<WDF_OBJECT_ATTRIBUTES>() as ULONG;
     timer_attrs.ParentObject = device.cast();
-    timer_attrs.ExecutionLevel = WDF_EXECUTION_LEVEL::WdfExecutionLevelPassive;
+    timer_attrs.ExecutionLevel = WdfExecutionLevelPassive;
 
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
@@ -118,7 +119,7 @@ pub unsafe fn stop_recovery_timer(ctx: &crate::device::DeviceContext) {
 /// Called by WDF with a valid timer handle parented to the device.
 unsafe extern "C" fn evt_recovery_timer(timer: WDFTIMER) {
     let device: WDFDEVICE = unsafe {
-        call_unsafe_wdf_function_binding!(WdfTimerGetParentObject, timer)
+        call_unsafe_wdf_function_binding!(WdfTimerGetParentObject, timer).cast()
     };
     // SAFETY: device was created with DeviceContext
     let ctx = unsafe { get_device_context(device) };
@@ -155,8 +156,8 @@ unsafe extern "C" fn evt_recovery_timer(timer: WDFTIMER) {
     let mut freq: LARGE_INTEGER = unsafe { core::mem::zeroed() };
     let counter = unsafe { KeQueryPerformanceCounter(&mut freq) };
     unsafe {
-        (*ctx).perf_freq = *freq.QuadPart();
-        (*ctx).last_report_time = *counter.QuadPart();
+        (*ctx).perf_freq = freq.QuadPart;
+        (*ctx).last_report_time = counter.QuadPart;
     }
 
     let status = unsafe { transport::issue_read_request(device) };

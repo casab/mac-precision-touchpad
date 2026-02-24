@@ -101,10 +101,8 @@ unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
 
     // Select single interface configuration
     let mut config_params: WDF_USB_DEVICE_SELECT_CONFIG_PARAMS = unsafe { core::mem::zeroed() };
-    // SAFETY: Initialize for single interface selection
-    unsafe {
-        WDF_USB_DEVICE_SELECT_CONFIG_PARAMS_INIT_SINGLE_INTERFACE(&mut config_params);
-    }
+    config_params.Size = core::mem::size_of::<WDF_USB_DEVICE_SELECT_CONFIG_PARAMS>() as ULONG;
+    config_params.Type = WdfUsbTargetDeviceSelectConfigTypeSingleInterface;
 
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
@@ -147,7 +145,7 @@ unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
             );
         }
 
-        if pipe_info.PipeType == WDF_USB_PIPE_TYPE::WdfUsbPipeTypeInterrupt {
+        if pipe_info.PipeType == WdfUsbPipeTypeInterrupt {
             unsafe { (*ctx).interrupt_pipe = pipe };
             found = true;
             break;
@@ -185,15 +183,10 @@ unsafe fn configure_continuous_reader(device: WDFDEVICE) -> NTSTATUS {
     }
 
     let mut reader_config: WDF_USB_CONTINUOUS_READER_CONFIG = unsafe { core::mem::zeroed() };
-    // SAFETY: Initialize the continuous reader config struct
-    unsafe {
-        WDF_USB_CONTINUOUS_READER_CONFIG_INIT(
-            &mut reader_config,
-            Some(evt_usb_interrupt_pipe_read_complete),
-            device.cast(), // Context = WDFDEVICE (passed back in callback)
-            transfer_length,
-        );
-    }
+    reader_config.Size = core::mem::size_of::<WDF_USB_CONTINUOUS_READER_CONFIG>() as ULONG;
+    reader_config.EvtUsbTargetPipeReadComplete = Some(evt_usb_interrupt_pipe_read_complete);
+    reader_config.EvtUsbTargetPipeReadCompleteContext = device.cast();
+    reader_config.TransferLength = transfer_length;
     reader_config.EvtUsbTargetPipeReadersFailed = Some(evt_usb_interrupt_readers_failed);
 
     let status = unsafe {
@@ -244,7 +237,7 @@ pub unsafe fn set_wellspring_mode(ctx: &mut DeviceContext, enable: bool) -> NTST
         call_unsafe_wdf_function_binding!(
             WdfMemoryCreate,
             WDF_NO_OBJECT_ATTRIBUTES,
-            POOL_TYPE::PagedPool as u32,
+            PagedPool as u32,
             u32::from_le_bytes(*b"aptp"),  // pool tag
             buf_size,
             &mut buf_handle,
@@ -257,28 +250,26 @@ pub unsafe fn set_wellspring_mode(ctx: &mut DeviceContext, enable: bool) -> NTST
 
     // 1. READ current mode
     let mut setup_packet: WDF_USB_CONTROL_SETUP_PACKET = unsafe { core::mem::zeroed() };
-    setup_packet.Packet.bm.Bytes.Request = WELLSPRING_MODE_READ_REQUEST_ID;
-    setup_packet.Packet.bm.Bytes.Direction = BMREQUEST_DEVICE_TO_HOST as u8;
-    setup_packet.Packet.bm.Bytes.Recipient = BMREQUEST_TO_INTERFACE as u8;
-    setup_packet.Packet.bm.Bytes.Type = BMREQUEST_CLASS as u8;
-    setup_packet.Packet.wValue = msg.req_val;
-    setup_packet.Packet.wIndex = msg.req_idx;
+    // bmRequestType: Class | Device-to-Host | Interface recipient
+    setup_packet.Packet.bm.Byte =
+        (BMREQUEST_TO_INTERFACE as u8)
+        | ((BMREQUEST_CLASS as u8) << 5)
+        | ((BMREQUEST_DEVICE_TO_HOST as u8) << 7);
+    setup_packet.Packet.bRequest = WELLSPRING_MODE_READ_REQUEST_ID;
+    setup_packet.Packet.wValue.Value = msg.req_val;
+    setup_packet.Packet.wIndex.Value = msg.req_idx;
 
     let mut mem_desc: WDF_MEMORY_DESCRIPTOR = unsafe { core::mem::zeroed() };
-    unsafe {
-        WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(
-            &mut mem_desc,
-            buffer,
-            buf_size as ULONG,
-        );
-    }
+    mem_desc.Type = WdfMemoryDescriptorTypeBuffer;
+    mem_desc.u.BufferType.Buffer = buffer;
+    mem_desc.u.BufferType.Length = buf_size as ULONG;
 
     let mut bytes_transferred: ULONG = 0;
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfUsbTargetDeviceSendControlTransferSynchronously,
             ctx.usb_device,
-            WDF_NO_HANDLE,
+            core::ptr::null_mut(),
             core::ptr::null_mut(), // SendOptions
             &mut setup_packet,
             &mut mem_desc,
@@ -306,14 +297,17 @@ pub unsafe fn set_wellspring_mode(ctx: &mut DeviceContext, enable: bool) -> NTST
     buf_slice[switch_idx] = if enable { msg.switch_on } else { msg.switch_off };
 
     // 3. WRITE modified mode
-    setup_packet.Packet.bm.Bytes.Request = WELLSPRING_MODE_WRITE_REQUEST_ID;
-    setup_packet.Packet.bm.Bytes.Direction = BMREQUEST_HOST_TO_DEVICE as u8;
+    setup_packet.Packet.bRequest = WELLSPRING_MODE_WRITE_REQUEST_ID;
+    setup_packet.Packet.bm.Byte =
+        (BMREQUEST_TO_INTERFACE as u8)
+        | ((BMREQUEST_CLASS as u8) << 5)
+        | ((BMREQUEST_HOST_TO_DEVICE as u8) << 7);
 
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfUsbTargetDeviceSendControlTransferSynchronously,
             ctx.usb_device,
-            WDF_NO_HANDLE,
+            core::ptr::null_mut(),
             core::ptr::null_mut(),
             &mut setup_packet,
             &mut mem_desc,

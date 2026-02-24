@@ -110,7 +110,7 @@ pub unsafe fn get_hid_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> NTST
             WdfMemoryCopyFromBuffer,
             memory,
             0,
-            &descriptor as *const HidDescriptor as *const core::ffi::c_void,
+            &descriptor as *const HidDescriptor as *mut core::ffi::c_void,
             copy_size
         )
     };
@@ -214,7 +214,7 @@ pub unsafe fn get_report_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> N
             WdfMemoryCopyFromBuffer,
             memory,
             0,
-            report_desc.as_ptr() as *const core::ffi::c_void,
+            report_desc.as_ptr() as *mut core::ffi::c_void,
             report_desc.len()
         )
     };

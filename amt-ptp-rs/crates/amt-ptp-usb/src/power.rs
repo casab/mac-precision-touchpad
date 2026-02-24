@@ -5,6 +5,7 @@
 use core::sync::atomic::Ordering;
 
 use wdk::println;
+use wdk_sys::ntddk::KeQueryPerformanceCounter;
 use wdk_sys::*;
 
 use crate::device::get_device_context;
@@ -42,21 +43,18 @@ pub unsafe extern "C" fn evt_device_d0_entry(
     let mut freq: LARGE_INTEGER = unsafe { core::mem::zeroed() };
     let counter = unsafe { KeQueryPerformanceCounter(&mut freq) };
     unsafe {
-        (*ctx).perf_freq = *freq.QuadPart();
-        (*ctx).last_report_time = *counter.QuadPart();
+        (*ctx).perf_freq = freq.QuadPart;
+        (*ctx).last_report_time = counter.QuadPart;
     }
 
-    // Start the continuous reader on the interrupt pipe
+    // Start the continuous reader on the interrupt pipe.
+    // In WDF, WDFUSBPIPE derives from WDFIOTARGET — cast directly.
     if unsafe { (*ctx).interrupt_pipe.is_null() } {
         println!("D0Entry: interrupt_pipe is null");
         return STATUS_DEVICE_NOT_READY;
     }
-    let io_target = unsafe {
-        call_unsafe_wdf_function_binding!(
-            WdfUsbTargetPipeGetIoTarget,
-            (*ctx).interrupt_pipe
-        )
-    };
+    // SAFETY: WDFUSBPIPE is a subtype of WDFIOTARGET in WDF object hierarchy.
+    let io_target: WDFIOTARGET = unsafe { (*ctx).interrupt_pipe.cast() };
     let status = unsafe {
         call_unsafe_wdf_function_binding!(WdfIoTargetStart, io_target)
     };
@@ -67,7 +65,7 @@ pub unsafe extern "C" fn evt_device_d0_entry(
             call_unsafe_wdf_function_binding!(
                 WdfIoTargetStop,
                 io_target,
-                WDF_IO_TARGET_SENT_IO_ACTION::WdfIoTargetCancelSentIo
+                WdfIoTargetCancelSentIo
             );
         }
         return status;
@@ -92,17 +90,13 @@ pub unsafe extern "C" fn evt_device_d0_exit(
 
     // Stop the interrupt pipe I/O target
     if !unsafe { (*ctx).interrupt_pipe.is_null() } {
-        let io_target = unsafe {
-            call_unsafe_wdf_function_binding!(
-                WdfUsbTargetPipeGetIoTarget,
-                (*ctx).interrupt_pipe
-            )
-        };
+        // SAFETY: WDFUSBPIPE is a subtype of WDFIOTARGET in WDF object hierarchy.
+        let io_target: WDFIOTARGET = unsafe { (*ctx).interrupt_pipe.cast() };
         unsafe {
             call_unsafe_wdf_function_binding!(
                 WdfIoTargetStop,
                 io_target,
-                WDF_IO_TARGET_SENT_IO_ACTION::WdfIoTargetCancelSentIo
+                WdfIoTargetCancelSentIo
             );
         }
     }

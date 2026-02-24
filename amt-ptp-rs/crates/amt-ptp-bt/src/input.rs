@@ -15,6 +15,7 @@
 
 use core::sync::atomic::Ordering;
 
+use wdk_sys::ntddk::KeQueryPerformanceCounter;
 use wdk_sys::*;
 
 use crate::device::get_device_context;
@@ -168,7 +169,7 @@ pub unsafe extern "C" fn evt_bt_read_complete(
     // ── Calculate scan time ──────────────────────────────────────────
     // PTP scan time is in 100µs units.
     let perf_counter = unsafe { KeQueryPerformanceCounter(core::ptr::null_mut()) };
-    let current_time = unsafe { *perf_counter.QuadPart() };
+    let current_time = unsafe { perf_counter.QuadPart };
     let delta_ticks = (current_time - unsafe { (*ctx).last_report_time }).max(0);
     let delta = if unsafe { (*ctx).perf_freq } > 0 {
         delta_ticks.saturating_mul(10_000) / unsafe { (*ctx).perf_freq }

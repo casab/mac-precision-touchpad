@@ -23,6 +23,20 @@ const REPORT_BUFFER_SIZE: usize = 1024;
 /// Pool tag for the lookaside list: 'apbt' (Apple Bluetooth).
 const BT_POOL_TAG: u32 = u32::from_le_bytes(*b"apbt");
 
+// ── HID Internal IOCTL Codes ────────────────────────────────────────
+//
+// From hidport.h / hidclass.h:
+//   CTL_CODE(FILE_DEVICE_KEYBOARD, id, METHOD_NEITHER, FILE_ANY_ACCESS)
+//
+// FILE_DEVICE_KEYBOARD = 0x0B, METHOD_NEITHER = 3, FILE_ANY_ACCESS = 0
+const fn hid_ctl_code(id: u32) -> ULONG {
+    (0x0Bu32 << 16) | (id << 2) | 3
+}
+
+const IOCTL_HID_READ_REPORT: ULONG = hid_ctl_code(2);
+const IOCTL_HID_GET_DEVICE_ATTRIBUTES: ULONG = hid_ctl_code(9);
+const IOCTL_HID_SET_FEATURE: ULONG = hid_ctl_code(100);
+
 /// Initialize the BT HID transport: get I/O target and create lookaside list.
 ///
 /// Called from `SelfManagedIoInit`. The default I/O target points to the lower
@@ -51,7 +65,7 @@ pub unsafe fn init_transport(device: WDFDEVICE) -> NTSTATUS {
             WdfLookasideListCreate,
             WDF_NO_OBJECT_ATTRIBUTES,
             REPORT_BUFFER_SIZE,
-            POOL_TYPE::NonPagedPoolNx as u32,
+            NonPagedPoolNx as u32,
             WDF_NO_OBJECT_ATTRIBUTES,
             BT_POOL_TAG,
             &mut (*ctx).hid_read_buffer_lookaside
@@ -89,13 +103,9 @@ pub unsafe fn query_device_attributes(ctx: &mut DeviceContext) -> NTSTATUS {
     attrs.size = core::mem::size_of::<HidDeviceAttributes>() as u32;
 
     let mut mem_desc: WDF_MEMORY_DESCRIPTOR = unsafe { core::mem::zeroed() };
-    unsafe {
-        WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(
-            &mut mem_desc,
-            &mut attrs as *mut _ as *mut core::ffi::c_void,
-            core::mem::size_of::<HidDeviceAttributes>() as ULONG,
-        );
-    }
+    mem_desc.Type = WdfMemoryDescriptorTypeBuffer;
+    mem_desc.u.BufferType.Buffer = &mut attrs as *mut _ as *mut core::ffi::c_void;
+    mem_desc.u.BufferType.Length = core::mem::size_of::<HidDeviceAttributes>() as ULONG;
 
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
@@ -180,7 +190,7 @@ pub unsafe fn activate_multitouch(ctx: &mut DeviceContext) -> NTSTATUS {
         call_unsafe_wdf_function_binding!(
             WdfMemoryCreate,
             &mut input_attrs,
-            POOL_TYPE::NonPagedPoolNx as u32,
+            NonPagedPoolNx as u32,
             BT_POOL_TAG,
             xfer_size,
             &mut input_mem,
@@ -228,7 +238,7 @@ pub unsafe fn activate_multitouch(ctx: &mut DeviceContext) -> NTSTATUS {
     // Send synchronously
     let mut send_options: WDF_REQUEST_SEND_OPTIONS = unsafe { core::mem::zeroed() };
     send_options.Size = core::mem::size_of::<WDF_REQUEST_SEND_OPTIONS>() as ULONG;
-    send_options.Flags = WDF_REQUEST_SEND_OPTIONS_FLAGS::WDF_REQUEST_SEND_OPTION_SYNCHRONOUS as u32;
+    send_options.Flags = WDF_REQUEST_SEND_OPTION_SYNCHRONOUS as u32;
 
     let sent = unsafe {
         call_unsafe_wdf_function_binding!(

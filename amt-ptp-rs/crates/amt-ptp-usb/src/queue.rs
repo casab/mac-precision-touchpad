@@ -46,12 +46,10 @@ pub unsafe fn queue_initialize(device: WDFDEVICE) -> NTSTATUS {
 
     // 1. Default parallel queue for HID IOCTLs
     let mut queue_config: WDF_IO_QUEUE_CONFIG = unsafe { core::mem::zeroed() };
-    unsafe {
-        WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(
-            &mut queue_config,
-            WDF_IO_QUEUE_DISPATCH_TYPE::WdfIoQueueDispatchParallel,
-        );
-    }
+    queue_config.Size = core::mem::size_of::<WDF_IO_QUEUE_CONFIG>() as ULONG;
+    queue_config.DefaultQueue = TRUE as BOOLEAN;
+    queue_config.DispatchType = WdfIoQueueDispatchParallel;
+    queue_config.PowerManaged = WdfUseDefault;
     queue_config.EvtIoInternalDeviceControl = Some(evt_io_internal_device_control);
     queue_config.EvtIoStop = Some(evt_io_stop);
 
@@ -72,13 +70,9 @@ pub unsafe fn queue_initialize(device: WDFDEVICE) -> NTSTATUS {
     // 2. Manual queue for pending read report requests (not power-managed,
     //    so requests survive D0Exit → D0Entry transitions)
     let mut input_queue_config: WDF_IO_QUEUE_CONFIG = unsafe { core::mem::zeroed() };
-    unsafe {
-        WDF_IO_QUEUE_CONFIG_INIT(
-            &mut input_queue_config,
-            WDF_IO_QUEUE_DISPATCH_TYPE::WdfIoQueueDispatchManual,
-        );
-    }
-    input_queue_config.PowerManaged = WDF_TRI_STATE::WdfFalse;
+    input_queue_config.Size = core::mem::size_of::<WDF_IO_QUEUE_CONFIG>() as ULONG;
+    input_queue_config.DispatchType = WdfIoQueueDispatchManual;
+    input_queue_config.PowerManaged = WdfFalse;
 
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
