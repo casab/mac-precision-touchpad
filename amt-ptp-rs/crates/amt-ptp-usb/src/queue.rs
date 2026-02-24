@@ -52,6 +52,7 @@ pub unsafe fn queue_initialize(device: WDFDEVICE) -> NTSTATUS {
         );
     }
     queue_config.EvtIoInternalDeviceControl = Some(evt_io_internal_device_control);
+    queue_config.EvtIoStop = Some(evt_io_stop);
 
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
@@ -93,6 +94,28 @@ pub unsafe fn queue_initialize(device: WDFDEVICE) -> NTSTATUS {
     }
 
     STATUS_SUCCESS
+}
+
+/// EvtIoStop callback for the default parallel queue.
+///
+/// Called by WDF when the queue is being stopped (device leaving D0).
+/// For a HID miniport's parallel queue, all requests complete quickly
+/// (no long-running I/O), so we simply acknowledge the stop.
+///
+/// Without this callback, WDF Verifier warns that a power-managed queue
+/// with pending requests has no EvtIoStop handler.
+///
+/// # Safety
+///
+/// Called by WDF with a valid queue, request, and action flags.
+unsafe extern "C" fn evt_io_stop(
+    _queue: WDFQUEUE,
+    _request: WDFREQUEST,
+    _action_flags: ULONG,
+) {
+    // No action needed — HID IOCTL requests on this queue complete
+    // synchronously within the EvtIoInternalDeviceControl callback.
+    // WDF will cancel/complete them automatically during power transitions.
 }
 
 /// Internal device control dispatch for HID miniport IOCTLs.
