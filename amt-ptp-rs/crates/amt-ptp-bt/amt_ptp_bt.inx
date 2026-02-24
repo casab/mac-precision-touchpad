@@ -1,0 +1,122 @@
+;
+; amt_ptp_bt.inf
+;
+; KMDF Bluetooth HID filter driver for Apple Magic Trackpad 2/3.
+; Creates a virtual Precision Touchpad (PTP) device via VHF.
+;
+; This replaces the AmtPtpHidFilter from the original C driver.
+; Instead of patching HIDCLASS IO handlers, this driver uses Microsoft's
+; Virtual HID Framework (VHF) to present a clean PTP device to Windows.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = HIDClass
+ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ManufacturerName%
+CatalogFile = amt_ptp_bt.cat
+DriverVer   =
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[ControlFlags]
+; Prevent manual installation via non-PnP hardware dialogs
+ExcludeFromSelect = *
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+amt_ptp_bt.sys = 1,,
+
+;*****************************************
+; Device matching
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName% = Standard, NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+; ---- Magic Trackpad 2 over Bluetooth ----
+%amt_ptp_bt.DeviceDesc% = amt_ptp_bt_FilterDevice, HID\{00001124-0000-1000-8000-00805f9b34fb}_VID&0001004c_PID&0265&Col01
+
+; ---- Magic Trackpad 2 over USB HID (for HID-level interception) ----
+%amt_ptp_bt.DeviceDesc% = amt_ptp_bt_FilterDevice, HID\VID_05AC&PID_0265&REV_0855&MI_01&Col01
+
+; ---- Null device for secondary HID collections (suppress confusion) ----
+%amt_ptp_bt.NullDeviceDesc% = amt_ptp_bt_NullDevice, HID\{00001124-0000-1000-8000-00805f9b34fb}_VID&0001004c_PID&0265&Col02
+%amt_ptp_bt.NullDeviceDesc% = amt_ptp_bt_NullDevice, HID\VID_05AC&PID_0265&REV_0855&MI_01&Col02
+%amt_ptp_bt.NullDeviceDesc% = amt_ptp_bt_NullDevice, HID\VID_05AC&PID_0265&REV_0855&MI_01&Col03
+
+;*****************************************
+; Null Device (suppress secondary collections)
+;*****************************************
+
+[amt_ptp_bt_NullDevice]
+; Empty — no files, no services
+
+[amt_ptp_bt_NullDevice.Services]
+AddService = , 2    ; null service — prevents driver loading for this device
+
+;*****************************************
+; Filter Driver Install Section
+;*****************************************
+
+[amt_ptp_bt_FilterDevice.NT]
+CopyFiles = FilterDriver_Payload
+
+[FilterDriver_Payload]
+amt_ptp_bt.sys
+
+;*****************************************
+; Service installation
+;*****************************************
+
+[amt_ptp_bt_FilterDevice.NT.Services]
+AddService = amt_ptp_bt,, amt_ptp_bt_Service_Inst
+AddService = mshidkmdf, %SPSVCINST_ASSOCSERVICE%, mshidkmdf_Service_Inst
+
+[amt_ptp_bt_FilterDevice.NT.HW]
+AddReg = amt_ptp_bt_AddReg
+
+[amt_ptp_bt_AddReg]
+HKR,, FriendlyName,, %amt_ptp_bt.DeviceDesc%
+HKR,, "LowerFilters", 0x00010008, "amt_ptp_bt"
+
+[amt_ptp_bt_Service_Inst]
+DisplayName    = %amt_ptp_bt.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\amt_ptp_bt.sys
+
+; Microsoft HID KMDF driver — serves as the HID miniport function driver
+[mshidkmdf_Service_Inst]
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %10%\System32\Drivers\mshidkmdf.sys
+
+;*****************************************
+; WDF Section
+;*****************************************
+
+[amt_ptp_bt_FilterDevice.NT.Wdf]
+KmdfService = amt_ptp_bt, amt_ptp_bt_wdfsect
+
+[amt_ptp_bt_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+;*****************************************
+; Strings
+;*****************************************
+
+[Strings]
+SPSVCINST_ASSOCSERVICE  = 0x00000002
+ManufacturerName        = "Bingxing Wang"
+DiskName                = "Apple Precision Touchpad (Bluetooth) Installation Disk"
+amt_ptp_bt.DeviceDesc   = "Apple Bluetooth Precision Touchpad Filter"
+amt_ptp_bt.NullDeviceDesc = "Apple Multi-touch Auxiliary Services"
+amt_ptp_bt.SVCDESC      = "Apple Bluetooth Precision Touchpad Filter Service"

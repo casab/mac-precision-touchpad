@@ -1,0 +1,114 @@
+;
+; amt_ptp_usb.inf
+;
+; KMDF USB function driver for Apple Magic Trackpad 2/3 and T2 trackpads.
+; Presents as a Windows Precision Touchpad (PTP) via HID miniport.
+;
+; This replaces both AmtPtpDeviceUsbKm and AmtPtpDeviceUsbUm from the
+; original C driver with a single KMDF driver.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = HIDClass
+ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ManufacturerName%
+CatalogFile = amt_ptp_usb.cat
+DriverVer   =
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+amt_ptp_usb.sys = 1,,
+
+;*****************************************
+; Device matching
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName% = Standard, NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+; ---- Apple T2 chip trackpads (MI_02 interface) ----
+; MacBook Pro 2018-2020, MacBook Air 2018-2020
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_0273&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_0274&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_0277&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_027A&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_027B&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_027C&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_027D&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_027E&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_027F&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_0280&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_0290&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_0291&MI_02
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_0340&MI_02
+
+; ---- Apple Magic Trackpad 2 USB (MI_01 interface) ----
+%amt_ptp_usb.DeviceDesc% = amt_ptp_usb_Device, USB\Vid_05ac&Pid_0265&MI_01
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[amt_ptp_usb_Device.NT]
+CopyFiles = Drivers_Dir
+
+[Drivers_Dir]
+amt_ptp_usb.sys
+
+;*****************************************
+; Service installation
+;*****************************************
+
+[amt_ptp_usb_Device.NT.Services]
+AddService = amt_ptp_usb,, amt_ptp_usb_Service_Inst
+AddService = mshidkmdf, %SPSVCINST_ASSOCSERVICE%, mshidkmdf_Service_Inst
+
+[amt_ptp_usb_Device.NT.HW]
+AddReg = amt_ptp_usb_AddReg
+
+[amt_ptp_usb_AddReg]
+HKR,, FriendlyName,, %amt_ptp_usb.DeviceDesc%
+HKR,, "LowerFilters", 0x00010008, "amt_ptp_usb"
+
+[amt_ptp_usb_Service_Inst]
+DisplayName    = %amt_ptp_usb.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\amt_ptp_usb.sys
+
+; Microsoft HID KMDF driver — serves as the HID miniport function driver
+[mshidkmdf_Service_Inst]
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %10%\System32\Drivers\mshidkmdf.sys
+
+;*****************************************
+; WDF Section
+;*****************************************
+
+[amt_ptp_usb_Device.NT.Wdf]
+KmdfService = amt_ptp_usb, amt_ptp_usb_wdfsect
+
+[amt_ptp_usb_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+;*****************************************
+; Strings
+;*****************************************
+
+[Strings]
+SPSVCINST_ASSOCSERVICE  = 0x00000002
+ManufacturerName        = "Bingxing Wang"
+DiskName                = "Apple Precision Touchpad (USB) Installation Disk"
+amt_ptp_usb.DeviceDesc  = "Apple USB Precision Touchpad Device"
+amt_ptp_usb.SVCDESC     = "Apple USB Precision Touchpad Service"

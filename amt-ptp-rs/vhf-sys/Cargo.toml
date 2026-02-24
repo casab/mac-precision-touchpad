@@ -1,0 +1,18 @@
+[package]
+name = "vhf-sys"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust FFI bindings for the Windows Virtual HID Framework (VHF) — vhf.h / Vhfkm.lib"
+
+[lib]
+# Regular rlib — type definitions and extern function declarations.
+# The build.rs emits cargo:rustc-link-lib=Vhfkm so consumers auto-link.
+# WDK library search paths come from the driver crate's build.rs.
+
+[dependencies]
+wdk-sys = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,171 @@
+;
+; AmtPtpDevice.inf
+;
+; Unified driver package for Apple Magic Trackpad 2/3 — Windows Precision Touchpad.
+; Ships both the USB function driver and Bluetooth HID filter driver in one INF.
+;
+; This is the single INF that users install. It matches both USB and BT devices
+; and loads the appropriate .sys driver for each.
+;
+; Replaces the original AmtPtpDevice.inf from the C driver package.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = HIDClass
+ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ManufacturerName%
+CatalogFile = AmtPtpDevice.cat
+DriverVer   =
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir   = 13
+UsbDrivers_Dir   = 13
+BtFilterDrivers_Dir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+amt_ptp_usb.sys = 1,,
+amt_ptp_bt.sys  = 1,,
+
+;*****************************************
+; Device matching
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName% = Standard, NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+
+; ==== USB: Apple T2 chip trackpads (MI_02 interface) ====
+; MacBook Pro 2018-2020, MacBook Air 2018-2020
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_0273&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_0274&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_0277&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_027A&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_027B&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_027C&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_027D&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_027E&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_027F&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_0280&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_0290&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_0291&MI_02
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_0340&MI_02
+
+; ==== USB: Magic Trackpad 2 standalone (MI_01 interface) ====
+%UsbDevice.DeviceDesc% = UsbDevice_Install, USB\Vid_05ac&Pid_0265&MI_01
+
+; ==== Bluetooth: Magic Trackpad 2 (Col01 = multitouch) ====
+%BtFilter.DeviceDesc% = BtFilter_Install, HID\{00001124-0000-1000-8000-00805f9b34fb}_VID&0001004c_PID&0265&Col01
+%BtFilter.DeviceDesc% = BtFilter_Install, HID\VID_05AC&PID_0265&REV_0855&MI_01&Col01
+
+; ==== Null devices: suppress secondary BT/USB HID collections ====
+%BtFilter.NullDeviceDesc% = NullDevice_Install, HID\{00001124-0000-1000-8000-00805f9b34fb}_VID&0001004c_PID&0265&Col02
+%BtFilter.NullDeviceDesc% = NullDevice_Install, HID\VID_05AC&PID_0265&REV_0855&MI_01&Col02
+%BtFilter.NullDeviceDesc% = NullDevice_Install, HID\VID_05AC&PID_0265&REV_0855&MI_01&Col03
+
+;*****************************************
+; Null Device (suppress secondary HID collections)
+;*****************************************
+
+[NullDevice_Install]
+; Empty — no files, no services
+
+[NullDevice_Install.Services]
+AddService = , 2
+
+;*****************************************
+; USB Driver Install
+;*****************************************
+
+[UsbDevice_Install.NT]
+CopyFiles = UsbDrivers_Dir
+
+[UsbDrivers_Dir]
+amt_ptp_usb.sys
+
+[UsbDevice_Install.NT.Services]
+AddService = amt_ptp_usb,, UsbDevice_Service_Inst
+AddService = mshidkmdf, %SPSVCINST_ASSOCSERVICE%, mshidkmdf_Service_Inst
+
+[UsbDevice_Install.NT.HW]
+AddReg = UsbDevice_AddReg
+
+[UsbDevice_AddReg]
+HKR,, FriendlyName,, %UsbDevice.DeviceDesc%
+HKR,, "LowerFilters", 0x00010008, "amt_ptp_usb"
+
+[UsbDevice_Service_Inst]
+DisplayName    = %UsbDevice.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\amt_ptp_usb.sys
+
+[UsbDevice_Install.NT.Wdf]
+KmdfService = amt_ptp_usb, UsbDevice_wdfsect
+
+[UsbDevice_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+;*****************************************
+; Bluetooth Filter Driver Install
+;*****************************************
+
+[BtFilter_Install.NT]
+CopyFiles = BtFilterDrivers_Dir
+
+[BtFilterDrivers_Dir]
+amt_ptp_bt.sys
+
+[BtFilter_Install.NT.Services]
+AddService = amt_ptp_bt,, BtFilter_Service_Inst
+AddService = mshidkmdf, %SPSVCINST_ASSOCSERVICE%, mshidkmdf_Service_Inst
+
+[BtFilter_Install.NT.HW]
+AddReg = BtFilter_AddReg
+
+[BtFilter_AddReg]
+HKR,, FriendlyName,, %BtFilter.DeviceDesc%
+HKR,, "LowerFilters", 0x00010008, "amt_ptp_bt"
+
+[BtFilter_Service_Inst]
+DisplayName    = %BtFilter.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\amt_ptp_bt.sys
+
+[BtFilter_Install.NT.Wdf]
+KmdfService = amt_ptp_bt, BtFilter_wdfsect
+
+[BtFilter_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+;*****************************************
+; Microsoft HID KMDF driver (shared)
+;*****************************************
+
+[mshidkmdf_Service_Inst]
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %10%\System32\Drivers\mshidkmdf.sys
+
+;*****************************************
+; Strings
+;*****************************************
+
+[Strings]
+SPSVCINST_ASSOCSERVICE   = 0x00000002
+ManufacturerName         = "Bingxing Wang"
+DiskName                 = "Apple Precision Touchpad Driver Installation Disk"
+UsbDevice.DeviceDesc     = "Apple USB Precision Touchpad Device"
+UsbDevice.SVCDESC        = "Apple USB Precision Touchpad Service"
+BtFilter.DeviceDesc      = "Apple Bluetooth Precision Touchpad Filter"
+BtFilter.NullDeviceDesc  = "Apple Multi-touch Auxiliary Services"
+BtFilter.SVCDESC         = "Apple Bluetooth Precision Touchpad Filter Service"

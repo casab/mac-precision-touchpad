@@ -1,0 +1,108 @@
+# Build automation for amt-ptp-rs driver workspace.
+#
+# Prerequisites (Windows only):
+#   - Rust nightly toolchain (pinned in rust-toolchain.toml)
+#   - Windows Driver Kit (WDK) or Enterprise WDK (eWDK)
+#   - LLVM 17.0.6 (not 18 — ARM64 codegen bug)
+#   - cargo-make: cargo install cargo-make
+#   - cargo-wdk:  cargo install cargo-wdk
+#
+# Usage:
+#   cargo make build           — build all crates (debug)
+#   cargo make build-release   — build all crates (release, LTO)
+#   cargo make check           — cargo check (fast type-check)
+#   cargo make test            — run tests for amt-ptp-core (host-side)
+#   cargo make package         — build drivers + assemble pkg/ output
+#   cargo make clean           — clean all build artifacts
+#
+# Note: Only amt-ptp-core can be tested on non-Windows hosts.
+# The driver crates (amt-ptp-usb, amt-ptp-bt) require a Windows WDK environment.
+
+[config]
+default_to_workspace = false
+
+# ─── Check ───────────────────────────────────────────────────────────
+
+[tasks.check]
+description = "Type-check all workspace crates"
+command = "cargo"
+args = ["check", "--workspace"]
+
+[tasks.check-core]
+description = "Type-check amt-ptp-core only (works on any host)"
+command = "cargo"
+args = ["check", "-p", "amt-ptp-core"]
+
+# ─── Build ───────────────────────────────────────────────────────────
+
+[tasks.build]
+description = "Build all workspace crates (debug)"
+command = "cargo"
+args = ["build", "--workspace"]
+
+[tasks.build-release]
+description = "Build all workspace crates (release, LTO)"
+command = "cargo"
+args = ["build", "--workspace", "--release"]
+
+[tasks.build-usb]
+description = "Build USB driver only (debug)"
+command = "cargo"
+args = ["build", "-p", "amt-ptp-usb"]
+
+[tasks.build-bt]
+description = "Build Bluetooth filter driver only (debug)"
+command = "cargo"
+args = ["build", "-p", "amt-ptp-bt"]
+
+# ─── Test ────────────────────────────────────────────────────────────
+
+[tasks.test]
+description = "Run all host-side tests (amt-ptp-core)"
+command = "cargo"
+args = ["test", "-p", "amt-ptp-core"]
+
+# ─── Package ─────────────────────────────────────────────────────────
+
+[tasks.package]
+description = "Build release drivers and assemble package output"
+dependencies = ["build-release", "package-copy"]
+
+[tasks.package-copy]
+description = "Copy driver binaries and INX to pkg/out/"
+script_runner = "@shell"
+script = [
+    "mkdir -p pkg/out",
+    "cp target/x86_64-pc-windows-msvc/release/amt_ptp_usb.sys pkg/out/ 2>/dev/null || cp target/release/amt_ptp_usb.sys pkg/out/ 2>/dev/null || echo 'USB driver .sys not found (expected on non-Windows)'",
+    "cp target/x86_64-pc-windows-msvc/release/amt_ptp_bt.sys pkg/out/ 2>/dev/null || cp target/release/amt_ptp_bt.sys pkg/out/ 2>/dev/null || echo 'BT driver .sys not found (expected on non-Windows)'",
+    "cp pkg/AmtPtpDevice.inx pkg/out/AmtPtpDevice.inf 2>/dev/null || echo 'INX copy skipped'",
+    "echo 'Package output in pkg/out/'",
+]
+
+# ─── Clean ───────────────────────────────────────────────────────────
+
+[tasks.clean]
+description = "Clean all build artifacts"
+command = "cargo"
+args = ["clean"]
+
+# ─── Lint ────────────────────────────────────────────────────────────
+
+[tasks.clippy]
+description = "Run clippy on all workspace crates"
+command = "cargo"
+args = ["clippy", "--workspace", "--", "-D", "warnings"]
+
+[tasks.fmt]
+description = "Check formatting"
+command = "cargo"
+args = ["fmt", "--all", "--check"]
+
+[tasks.fmt-fix]
+description = "Auto-fix formatting"
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.lint]
+description = "Run all lints (clippy + fmt check)"
+dependencies = ["clippy", "fmt"]

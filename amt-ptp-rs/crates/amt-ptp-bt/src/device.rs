@@ -1,0 +1,167 @@
+//! Device context and WDF type info for the BT HID filter driver.
+//!
+//! The device context holds all per-device state: VHF handle, device
+//! identification, PTP reporting flags, and timing. This is the BT driver
+//! equivalent of the USB driver's `device.rs`.
+//!
+//! Key difference from USB: no USB handles or Wellspring mode. Instead,
+//! a VHF handle creates a virtual PTP device, and an I/O target
+//! communicates with the underlying BT HID device.
+
+use core::ffi::c_void;
+use core::sync::atomic::AtomicBool;
+
+use wdk_sys::*;
+
+use amt_ptp_core::device::DeviceConfig;
+use vhf_sys::VHFHANDLE;
+
+// Compile-time check: Option<&DeviceConfig> must be pointer-sized for repr(C) layout.
+// Rust guarantees this for Option<&T> (nullable pointer optimization), but a static
+// assert protects against any hypothetical future change.
+const _: () = assert!(
+    core::mem::size_of::<Option<&DeviceConfig>>() == core::mem::size_of::<*const DeviceConfig>(),
+    "Option<&DeviceConfig> must be pointer-sized for repr(C) DeviceContext"
+);
+
+/// Per-device context for the BT HID filter driver.
+///
+/// Stored in the WDF device object via `WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE`.
+/// Equivalent to `DEVICE_CONTEXT` from the C driver's `Device.h`, but with
+/// VHF handle replacing the HIDCLASS detour state.
+#[repr(C)]
+pub struct DeviceContext {
+    // ── WDF/WDM Handles ─────────────────────────────────────────
+    /// WDF device handle.
+    pub device: WDFDEVICE,
+    /// WDM device object (needed for `VHF_CONFIG.DeviceObject`).
+    pub wdm_device_object: *mut c_void,
+
+    // ── VHF Virtual PTP Device ──────────────────────────────────
+    /// Handle to the VHF virtual HID device (created in SelfManagedIoInit).
+    pub vhf_handle: VHFHANDLE,
+
+    // ── Device Identification ────────────────────────────────────
+    /// Vendor ID of the underlying Apple trackpad (USB or BT VID).
+    pub vendor_id: u16,
+    /// Product ID of the underlying Apple trackpad.
+    pub product_id: u16,
+    /// Device version number.
+    pub version_number: u16,
+
+    // ── Device Configuration ────────────────────────────────────
+    /// Pointer to the static device config (from `CONFIG_TABLE`).
+    pub device_info: Option<&'static DeviceConfig>,
+    /// Whether the VHF device is fully configured and operational.
+    pub device_configured: AtomicBool,
+
+    // ── PTP State ───────────────────────────────────────────────
+    /// Whether PTP input reporting is enabled (mode = Windows PTP).
+    pub ptp_input_on: AtomicBool,
+    /// Whether surface (touch) reporting is enabled.
+    pub ptp_report_touch: AtomicBool,
+    /// Whether button reporting is enabled.
+    pub ptp_report_button: AtomicBool,
+
+    // ── Timing ──────────────────────────────────────────────────
+    /// Performance counter frequency (ticks per second), for scan time conversion.
+    pub perf_freq: i64,
+    /// Performance counter value at the last report, for scan time calculation.
+    pub last_report_time: i64,
+
+    // ── VHF Report Gating ──────────────────────────────────────
+    /// Whether VHF is ready to accept the next input report.
+    /// Set to `true` by `EvtVhfReadyForNextReadReport`, cleared after submission.
+    pub vhf_ready: AtomicBool,
+
+    // ── HID Transport ────────────────────────────────────────────
+    /// I/O target to the underlying BT HID device.
+    pub hid_io_target: WDFIOTARGET,
+    /// Lookaside list for read request buffers.
+    pub hid_read_buffer_lookaside: WDFLOOKASIDE,
+
+    // ── Recovery ──────────────────────────────────────────────────
+    /// Timer for multitouch configuration retry (fires after 2 seconds).
+    pub recovery_timer: WDFTIMER,
+    /// Number of consecutive recovery attempts (reset on success).
+    pub recovery_attempts: u32,
+}
+
+impl DeviceContext {
+    /// Initialize all fields to safe defaults.
+    ///
+    /// Called after WDF allocates the context memory. WDF/WDM handles are
+    /// zeroed (null) and get populated during device initialization.
+    ///
+    /// # Safety
+    ///
+    /// All handle fields are initialized to null. They must be populated
+    /// by the appropriate WDF callbacks before use.
+    pub unsafe fn init_defaults(&mut self) {
+        self.device = core::ptr::null_mut();
+        self.wdm_device_object = core::ptr::null_mut();
+        self.vhf_handle = core::ptr::null_mut();
+        self.vendor_id = 0;
+        self.product_id = 0;
+        self.version_number = 0;
+        self.device_info = None;
+        self.device_configured = AtomicBool::new(false);
+        self.ptp_input_on = AtomicBool::new(false);
+        self.ptp_report_touch = AtomicBool::new(true); // enabled by default
+        self.ptp_report_button = AtomicBool::new(true); // enabled by default
+        self.perf_freq = 0;
+        self.last_report_time = 0;
+        self.vhf_ready = AtomicBool::new(true);
+        self.hid_io_target = core::ptr::null_mut();
+        self.hid_read_buffer_lookaside = core::ptr::null_mut();
+        self.recovery_timer = core::ptr::null_mut();
+        self.recovery_attempts = 0;
+    }
+}
+
+// ── Sync wrapper for WDF context type info ────────────────────────────
+//
+// WDF_OBJECT_CONTEXT_TYPE_INFO contains raw pointers (*const i8 for ContextName,
+// *const Self for UniqueType) which don't implement Sync. We use a newtype
+// wrapper to provide the Sync impl needed for a `static`.
+
+/// Wrapper to allow `WDF_OBJECT_CONTEXT_TYPE_INFO` in a `static`.
+#[repr(transparent)]
+pub struct SyncContextTypeInfo(pub WDF_OBJECT_CONTEXT_TYPE_INFO);
+
+// SAFETY: WDF_OBJECT_CONTEXT_TYPE_INFO is read-only after initialization.
+// It contains raw pointers to static data (string literals and null) and
+// an Option<fn> callback. WDF accesses this from any thread context,
+// matching the behavior of the C driver's WDF_DECLARE_CONTEXT_TYPE.
+unsafe impl Sync for SyncContextTypeInfo {}
+
+/// Get the device context from a WDFDEVICE handle.
+///
+/// # Safety
+///
+/// The device must have been created with a context of type [`DeviceContext`].
+/// The returned pointer is valid for the lifetime of the device object.
+pub unsafe fn get_device_context(device: WDFDEVICE) -> *mut DeviceContext {
+    unsafe {
+        call_unsafe_wdf_function_binding!(
+            WdfObjectGetTypedContextWorker,
+            device.cast(),
+            &DEVICE_CONTEXT_TYPE_INFO.0 as *const WDF_OBJECT_CONTEXT_TYPE_INFO,
+        )
+        .cast::<DeviceContext>()
+    }
+}
+
+/// WDF context type info for [`DeviceContext`].
+///
+/// This is the static type descriptor that WDF uses to track context size
+/// and type. It's the equivalent of what `WDF_DECLARE_CONTEXT_TYPE` generates.
+#[used]
+pub static DEVICE_CONTEXT_TYPE_INFO: SyncContextTypeInfo =
+    SyncContextTypeInfo(WDF_OBJECT_CONTEXT_TYPE_INFO {
+        Size: core::mem::size_of::<WDF_OBJECT_CONTEXT_TYPE_INFO>() as ULONG,
+        ContextName: b"BtDeviceContext\0".as_ptr().cast(),
+        ContextSize: core::mem::size_of::<DeviceContext>(),
+        UniqueType: core::ptr::null(),
+        EvtDriverGetUniqueContextType: None,
+    });
