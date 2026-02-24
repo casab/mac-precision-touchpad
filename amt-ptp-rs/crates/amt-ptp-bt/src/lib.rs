@@ -42,6 +42,8 @@ extern crate wdk_panic;
 use wdk_alloc::WdkAllocator;
 
 use wdk::println;
+use wdk_sys::_WDF_EXECUTION_LEVEL::WdfExecutionLevelInheritFromParent;
+use wdk_sys::_WDF_SYNCHRONIZATION_SCOPE::WdfSynchronizationScopeInheritFromParent;
 use wdk_sys::*;
 
 #[cfg(not(test))]

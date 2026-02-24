@@ -16,6 +16,7 @@ use core::sync::atomic::Ordering;
 
 use wdk::println;
 use wdk_sys::ntddk::KeQueryPerformanceCounter;
+use wdk_sys::_WDF_EXECUTION_LEVEL::WdfExecutionLevelPassive;
 use wdk_sys::*;
 
 use crate::device::get_device_context;

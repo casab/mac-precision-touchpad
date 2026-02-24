@@ -9,6 +9,8 @@
 //! Ported from `Queue.c` in the C driver.
 
 use wdk::println;
+use wdk_sys::_WDF_IO_QUEUE_DISPATCH_TYPE::{WdfIoQueueDispatchManual, WdfIoQueueDispatchParallel};
+use wdk_sys::_WDF_TRI_STATE::{WdfFalse, WdfUseDefault};
 use wdk_sys::*;
 
 use crate::device::get_device_context;

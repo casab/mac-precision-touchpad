@@ -18,6 +18,7 @@ use core::sync::atomic::Ordering;
 
 use wdk::println;
 use wdk_sys::ntddk::KeQueryPerformanceCounter;
+use wdk_sys::_WDF_IO_TARGET_SENT_IO_ACTION::WdfIoTargetCancelSentIo;
 use wdk_sys::*;
 
 use amt_ptp_core::constants::*;

@@ -4,6 +4,10 @@
 //! AmtPtpConfigContReaderForInterruptEndPoint) in the C driver.
 
 use wdk::println;
+use wdk_sys::_POOL_TYPE::PagedPool;
+use wdk_sys::_WDF_MEMORY_DESCRIPTOR_TYPE::WdfMemoryDescriptorTypeBuffer;
+use wdk_sys::_WDF_USB_PIPE_TYPE::WdfUsbPipeTypeInterrupt;
+use wdk_sys::_WdfUsbTargetDeviceSelectConfigType::WdfUsbTargetDeviceSelectConfigTypeSingleInterface;
 use wdk_sys::*;
 
 use crate::device::{get_device_context, DeviceContext};

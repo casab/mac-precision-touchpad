@@ -12,6 +12,9 @@
 //! (`PtpFilterInputIssueTransportRequest`) in the C BT filter driver.
 
 use wdk::println;
+use wdk_sys::_POOL_TYPE::NonPagedPoolNx;
+use wdk_sys::_WDF_MEMORY_DESCRIPTOR_TYPE::WdfMemoryDescriptorTypeBuffer;
+use wdk_sys::_WDF_REQUEST_SEND_OPTIONS_FLAGS::WDF_REQUEST_SEND_OPTION_SYNCHRONOUS;
 use wdk_sys::*;
 
 use crate::device::{get_device_context, DeviceContext};
