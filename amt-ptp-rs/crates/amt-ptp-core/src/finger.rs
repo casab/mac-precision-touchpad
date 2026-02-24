@@ -191,15 +191,18 @@ pub fn parse_report(
         });
     }
 
+    // Subtract both header and delta to get the actual finger data region.
+    // Delta is the offset from header end to the first finger block (nonzero for TYPE4).
     let payload = report.len() - header_size;
-    if finger_size > 0 && payload % finger_size != 0 {
+    let finger_payload = payload.saturating_sub(delta);
+    if finger_size > 0 && finger_payload % finger_size != 0 {
         return Err(Error::MalformedPayload {
-            payload_len: payload,
+            payload_len: finger_payload,
             finger_size,
         });
     }
 
-    let raw_count = if finger_size > 0 { payload / finger_size } else { 0 };
+    let raw_count = if finger_size > 0 { finger_payload / finger_size } else { 0 };
     let count = raw_count.min(out.len());
 
     // Parse fingers
@@ -346,5 +349,61 @@ mod tests {
         // -5000 - (-3678) = -1322 → clamped to 0
         assert_eq!(x, 0);
         assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn type4_parse_report_with_delta() {
+        // TYPE4: header=46, delta=2, finger_size=30
+        // A report with 2 fingers: 46 + 2 + 60 = 108 bytes
+        use crate::constants::{PID_T2_7A, PTP_MAX_CONTACT_POINTS};
+        let config = lookup_config(PID_T2_7A);
+        let header = config.trackpad_type.header_size_usb();
+        let delta = config.trackpad_type.finger_delta();
+        let fsize = config.trackpad_type.finger_size();
+        assert_eq!(header, 46);
+        assert_eq!(delta, 2);
+        assert_eq!(fsize, 30);
+
+        // 46 + 2 + 2*30 = 108 bytes
+        let mut report = [0u8; 108];
+
+        // Set button byte (offset 31 for TYPE4) to pressed
+        report[crate::constants::BUTTON_TYPE4] = 0x01;
+
+        let mut fingers = [Finger {
+            raw_x: 0, raw_y: 0,
+            touch_major: 0, touch_minor: 0,
+            size: 0, pressure: 0,
+            contact_id: 0, orientation: 0,
+        }; PTP_MAX_CONTACT_POINTS];
+
+        let result = parse_report(&report, config, header, &mut fingers);
+        assert!(result.is_ok(), "TYPE4 parse_report should succeed, got: {result:?}");
+        let (count, button) = result.unwrap();
+        assert_eq!(count, 2);
+        assert!(button);
+    }
+
+    #[test]
+    fn type5_parse_report_zero_delta() {
+        // TYPE5: header=12 (USB), delta=0, finger_size=9
+        // A report with 3 fingers: 12 + 0 + 27 = 39 bytes
+        use crate::constants::PTP_MAX_CONTACT_POINTS;
+        let config = lookup_config(PID_MAGIC_TRACKPAD2);
+        let header = config.trackpad_type.header_size_usb();
+        assert_eq!(config.trackpad_type.finger_delta(), 0);
+
+        // 12 + 3*9 = 39 bytes
+        let report = [0u8; 39];
+
+        let mut fingers = [Finger {
+            raw_x: 0, raw_y: 0,
+            touch_major: 0, touch_minor: 0,
+            size: 0, pressure: 0,
+            contact_id: 0, orientation: 0,
+        }; PTP_MAX_CONTACT_POINTS];
+
+        let (count, _) = parse_report(&report, config, header, &mut fingers).unwrap();
+        assert_eq!(count, 3);
     }
 }
