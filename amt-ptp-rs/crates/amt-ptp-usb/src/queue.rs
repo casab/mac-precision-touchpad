@@ -41,7 +41,7 @@ const IOCTL_HID_SET_FEATURE: ULONG = hid_ctl_code(100);
 ///
 /// Device must be created with a [`DeviceContext`](crate::device::DeviceContext).
 pub unsafe fn queue_initialize(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     // 1. Default parallel queue for HID IOCTLs
     let mut queue_config: WDF_IO_QUEUE_CONFIG = unsafe { core::mem::zeroed() };
@@ -84,7 +84,7 @@ pub unsafe fn queue_initialize(device: WDFDEVICE) -> NTSTATUS {
             device,
             &mut input_queue_config,
             WDF_NO_OBJECT_ATTRIBUTES,
-            &mut ctx.input_queue
+            &mut (*ctx).input_queue
         )
     };
     if !NT_SUCCESS(status) {
@@ -154,13 +154,13 @@ unsafe fn dispatch_read_report(
     request: WDFREQUEST,
     pending: &mut bool,
 ) -> NTSTATUS {
-    let ctx = unsafe { &*get_device_context(device) };
+    let ctx = get_device_context(device);
 
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfRequestForwardToIoQueue,
             request,
-            ctx.input_queue
+            (*ctx).input_queue
         )
     };
 

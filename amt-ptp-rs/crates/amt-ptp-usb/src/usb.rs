@@ -23,16 +23,16 @@ use amt_ptp_core::device::lookup_config;
 /// and stored in the device context.
 pub unsafe fn prepare_usb_hardware(device: WDFDEVICE) -> NTSTATUS {
     // SAFETY: device was created with DeviceContext
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     // 1. Create USB device handle (first time only)
-    if ctx.usb_device.is_null() {
+    if unsafe { (*ctx).usb_device.is_null() } {
         let status = unsafe {
             call_unsafe_wdf_function_binding!(
                 WdfUsbTargetDeviceCreate,
                 device,
                 WDF_NO_OBJECT_ATTRIBUTES,
-                &mut ctx.usb_device
+                &mut (*ctx).usb_device
             )
         };
         if !NT_SUCCESS(status) {
@@ -45,15 +45,15 @@ pub unsafe fn prepare_usb_hardware(device: WDFDEVICE) -> NTSTATUS {
     unsafe {
         call_unsafe_wdf_function_binding!(
             WdfUsbTargetDeviceGetDeviceDescriptor,
-            ctx.usb_device,
-            &mut ctx.device_descriptor
+            (*ctx).usb_device,
+            &mut (*ctx).device_descriptor
         );
     }
 
     // 3. Look up device config by product ID
-    let product_id = ctx.device_descriptor.idProduct;
+    let product_id = unsafe { (*ctx).device_descriptor.idProduct };
     let config = lookup_config(product_id);
-    ctx.device_info = Some(config);
+    unsafe { (*ctx).device_info = Some(config) };
     println!(
         "Apple trackpad detected: PID={product_id:#06x}, type={:?}",
         config.trackpad_type
@@ -65,12 +65,12 @@ pub unsafe fn prepare_usb_hardware(device: WDFDEVICE) -> NTSTATUS {
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfUsbTargetDeviceRetrieveInformation,
-            ctx.usb_device,
+            (*ctx).usb_device,
             &mut device_info
         )
     };
     if NT_SUCCESS(status) {
-        ctx.usb_device_traits = device_info.Traits;
+        unsafe { (*ctx).usb_device_traits = device_info.Traits };
     }
 
     // 5. Select interface and find interrupt pipe
@@ -96,7 +96,7 @@ pub unsafe fn prepare_usb_hardware(device: WDFDEVICE) -> NTSTATUS {
 ///
 /// USB device must be created and stored in the device context.
 unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     // Select single interface configuration
     let mut config_params: WDF_USB_DEVICE_SELECT_CONFIG_PARAMS = unsafe { core::mem::zeroed() };
@@ -108,7 +108,7 @@ unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfUsbTargetDeviceSelectConfig,
-            ctx.usb_device,
+            (*ctx).usb_device,
             WDF_NO_OBJECT_ATTRIBUTES,
             &mut config_params
         )
@@ -120,7 +120,7 @@ unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
     // Extract configured interface and pipe count
     // SAFETY: After successful SelectConfig, the SingleInterface union member is valid
     let single_iface = unsafe { config_params.Types.SingleInterface };
-    ctx.usb_interface = single_iface.ConfiguredUsbInterface;
+    unsafe { (*ctx).usb_interface = single_iface.ConfiguredUsbInterface };
     let num_pipes = single_iface.NumberConfiguredPipes;
 
     // Find the interrupt IN pipe
@@ -132,7 +132,7 @@ unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
         let pipe = unsafe {
             call_unsafe_wdf_function_binding!(
                 WdfUsbInterfaceGetConfiguredPipe,
-                ctx.usb_interface,
+                (*ctx).usb_interface,
                 index as u8,
                 &mut pipe_info
             )
@@ -147,7 +147,7 @@ unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
         }
 
         if pipe_info.PipeType == WDF_USB_PIPE_TYPE::WdfUsbPipeTypeInterrupt {
-            ctx.interrupt_pipe = pipe;
+            unsafe { (*ctx).interrupt_pipe = pipe };
             found = true;
             break;
         }
@@ -171,8 +171,8 @@ unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
 ///
 /// Interrupt pipe must be selected and stored in the device context.
 unsafe fn configure_continuous_reader(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = unsafe { &*get_device_context(device) };
-    let config = match ctx.device_info {
+    let ctx = get_device_context(device);
+    let config = match unsafe { (*ctx).device_info } {
         Some(c) => c,
         None => return STATUS_DEVICE_NOT_READY,
     };
@@ -197,7 +197,7 @@ unsafe fn configure_continuous_reader(device: WDFDEVICE) -> NTSTATUS {
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfUsbTargetPipeConfigContinuousReader,
-            ctx.interrupt_pipe,
+            (*ctx).interrupt_pipe,
             &mut reader_config
         )
     };

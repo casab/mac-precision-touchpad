@@ -3,6 +3,8 @@
 //! The device context holds all per-device state: USB handles, device config,
 //! Wellspring mode state, PTP reporting flags, and timing.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use wdk_sys::*;
 
 use amt_ptp_core::device::DeviceConfig;
@@ -39,11 +41,11 @@ pub struct DeviceContext {
 
     // ── PTP State ───────────────────────────────────────────────
     /// Whether PTP input reporting is enabled (mode = Windows PTP).
-    pub ptp_input_on: bool,
+    pub ptp_input_on: AtomicBool,
     /// Whether surface (touch) reporting is enabled.
-    pub ptp_report_touch: bool,
+    pub ptp_report_touch: AtomicBool,
     /// Whether button reporting is enabled.
-    pub ptp_report_button: bool,
+    pub ptp_report_button: AtomicBool,
 
     // ── Timing ──────────────────────────────────────────────────
     /// Performance counter frequency (ticks per second), for scan time conversion.
@@ -71,9 +73,9 @@ impl DeviceContext {
         self.input_queue = core::ptr::null_mut();
         self.device_info = None;
         self.is_wellspring_mode_on = false;
-        self.ptp_input_on = false;
-        self.ptp_report_touch = true; // enabled by default
-        self.ptp_report_button = true; // enabled by default
+        self.ptp_input_on = AtomicBool::new(false);
+        self.ptp_report_touch = AtomicBool::new(true); // enabled by default
+        self.ptp_report_button = AtomicBool::new(true); // enabled by default
         self.perf_freq = 0;
         self.last_report_time = 0;
     }

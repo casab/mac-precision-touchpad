@@ -1,4 +1,4 @@
-//! Recovery timer and work item for automatic retry on transport failures.
+//! Recovery timer for automatic retry on transport failures.
 //!
 //! The BT trackpad may not respond to the multitouch activation command
 //! immediately (e.g., still initializing after power-on), or a read request
@@ -12,6 +12,8 @@
 //! This matches the C driver's `PtpFilterRecoveryTimerCallback` pattern
 //! from `Device.c`.
 
+use core::sync::atomic::Ordering;
+
 use wdk::println;
 use wdk_sys::*;
 
@@ -24,7 +26,7 @@ const RECOVERY_INTERVAL_SEC: i64 = 2;
 /// Maximum number of consecutive recovery attempts before giving up.
 const MAX_RECOVERY_ATTEMPTS: u32 = 10;
 
-/// Create the recovery timer and work item during device initialization.
+/// Create the recovery timer during device initialization.
 ///
 /// The timer is configured to fire at PASSIVE_LEVEL with automatic
 /// serialization, parented to the device object.
@@ -33,7 +35,7 @@ const MAX_RECOVERY_ATTEMPTS: u32 = 10;
 ///
 /// Device must be a valid WDFDEVICE with an initialized DeviceContext.
 pub unsafe fn create_recovery_objects(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     // ── Recovery Timer ───────────────────────────────────────────
     let mut timer_config: WDF_TIMER_CONFIG = unsafe { core::mem::zeroed() };
@@ -51,34 +53,11 @@ pub unsafe fn create_recovery_objects(device: WDFDEVICE) -> NTSTATUS {
             WdfTimerCreate,
             &mut timer_config,
             &mut timer_attrs,
-            &mut ctx.recovery_timer
+            &mut (*ctx).recovery_timer
         )
     };
     if !NT_SUCCESS(status) {
         println!("recovery: WdfTimerCreate failed: {status:#x}");
-        return status;
-    }
-
-    // ── Recovery Work Item ───────────────────────────────────────
-    let mut workitem_config: WDF_WORKITEM_CONFIG = unsafe { core::mem::zeroed() };
-    workitem_config.Size = core::mem::size_of::<WDF_WORKITEM_CONFIG>() as ULONG;
-    workitem_config.EvtWorkItemFunc = Some(evt_recovery_work_item);
-    workitem_config.AutomaticSerialization = TRUE as BOOLEAN;
-
-    let mut workitem_attrs: WDF_OBJECT_ATTRIBUTES = unsafe { core::mem::zeroed() };
-    workitem_attrs.Size = core::mem::size_of::<WDF_OBJECT_ATTRIBUTES>() as ULONG;
-    workitem_attrs.ParentObject = device.cast();
-
-    let status = unsafe {
-        call_unsafe_wdf_function_binding!(
-            WdfWorkItemCreate,
-            &mut workitem_config,
-            &mut workitem_attrs,
-            &mut ctx.recovery_work_item
-        )
-    };
-    if !NT_SUCCESS(status) {
-        println!("recovery: WdfWorkItemCreate failed: {status:#x}");
         return status;
     }
 
@@ -140,25 +119,27 @@ unsafe extern "C" fn evt_recovery_timer(timer: WDFTIMER) {
     let device: WDFDEVICE = unsafe {
         call_unsafe_wdf_function_binding!(WdfTimerGetParentObject, timer)
     };
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     // Don't recover if device is shutting down or suspended
-    if ctx.hid_io_target.is_null() || !ctx.device_configured {
+    if unsafe { (*ctx).hid_io_target.is_null() }
+        || !unsafe { (*ctx).device_configured.load(Ordering::Relaxed) }
+    {
         return;
     }
 
-    ctx.recovery_attempts += 1;
+    unsafe { (*ctx).recovery_attempts += 1 };
     println!(
         "recovery: attempt {} of {MAX_RECOVERY_ATTEMPTS}",
-        ctx.recovery_attempts
+        unsafe { (*ctx).recovery_attempts }
     );
 
     // Try to activate multitouch mode
-    let status = unsafe { transport::activate_multitouch(ctx) };
+    let status = unsafe { transport::activate_multitouch(&mut *ctx) };
     if !NT_SUCCESS(status) {
         println!("recovery: multitouch activation failed: {status:#x}");
-        if ctx.recovery_attempts < MAX_RECOVERY_ATTEMPTS {
-            unsafe { start_recovery_timer(ctx) };
+        if unsafe { (*ctx).recovery_attempts } < MAX_RECOVERY_ATTEMPTS {
+            unsafe { start_recovery_timer(&*ctx) };
         } else {
             println!("recovery: max attempts reached, giving up");
         }
@@ -166,56 +147,24 @@ unsafe extern "C" fn evt_recovery_timer(timer: WDFTIMER) {
     }
 
     // Multitouch activated — mark device as configured and issue read request
-    ctx.device_configured = true;
+    unsafe { (*ctx).device_configured.store(true, Ordering::Relaxed) };
 
     // Record fresh timestamp
     let mut freq: LARGE_INTEGER = unsafe { core::mem::zeroed() };
     let counter = unsafe { KeQueryPerformanceCounter(&mut freq) };
-    ctx.perf_freq = unsafe { *freq.QuadPart() };
-    ctx.last_report_time = unsafe { *counter.QuadPart() };
+    unsafe {
+        (*ctx).perf_freq = *freq.QuadPart();
+        (*ctx).last_report_time = *counter.QuadPart();
+    }
 
     let status = unsafe { transport::issue_read_request(device) };
     if NT_SUCCESS(status) {
-        ctx.recovery_attempts = 0;
+        unsafe { (*ctx).recovery_attempts = 0 };
         println!("recovery: device recovered successfully");
     } else {
         println!("recovery: read request failed: {status:#x}");
-        if ctx.recovery_attempts < MAX_RECOVERY_ATTEMPTS {
-            unsafe { start_recovery_timer(ctx) };
+        if unsafe { (*ctx).recovery_attempts } < MAX_RECOVERY_ATTEMPTS {
+            unsafe { start_recovery_timer(&*ctx) };
         }
-    }
-}
-
-/// Recovery work item callback.
-///
-/// Used for deferred recovery operations that require PASSIVE_LEVEL
-/// execution from a non-serialized context. Currently delegates to
-/// the same recovery logic as the timer.
-///
-/// # Safety
-///
-/// Called by WDF with a valid work item handle parented to the device.
-unsafe extern "C" fn evt_recovery_work_item(work_item: WDFWORKITEM) {
-    let device: WDFDEVICE = unsafe {
-        call_unsafe_wdf_function_binding!(WdfWorkItemGetParentObject, work_item)
-    };
-    let ctx = unsafe { &mut *get_device_context(device) };
-
-    // Attempt multitouch activation
-    let status = unsafe { transport::activate_multitouch(ctx) };
-    if NT_SUCCESS(status) {
-        ctx.device_configured = true;
-
-        let mut freq: LARGE_INTEGER = unsafe { core::mem::zeroed() };
-        let counter = unsafe { KeQueryPerformanceCounter(&mut freq) };
-        ctx.perf_freq = unsafe { *freq.QuadPart() };
-        ctx.last_report_time = unsafe { *counter.QuadPart() };
-
-        let _ = unsafe { transport::issue_read_request(device) };
-        ctx.recovery_attempts = 0;
-        println!("recovery (workitem): device recovered");
-    } else {
-        println!("recovery (workitem): failed, scheduling timer retry");
-        unsafe { start_recovery_timer(ctx) };
     }
 }

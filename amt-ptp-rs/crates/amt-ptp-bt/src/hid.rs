@@ -15,6 +15,8 @@
 //! - [`evt_vhf_ready_for_next_read_report`] → `EvtVhfReadyForNextReadReport`
 //! - [`evt_vhf_cleanup`] → `EvtVhfCleanup`
 
+use core::sync::atomic::Ordering;
+
 use wdk::println;
 use wdk_sys::{STATUS_BUFFER_TOO_SMALL, STATUS_NOT_SUPPORTED, STATUS_SUCCESS};
 
@@ -42,7 +44,7 @@ pub unsafe extern "C" fn evt_vhf_get_feature(
     _vhf_operation_context: PVOID,
     hid_transfer_packet: *mut HID_XFER_PACKET,
 ) {
-    let _ctx = unsafe { &*(vhf_client_context as *const DeviceContext) };
+    let _ctx = vhf_client_context as *const DeviceContext;
     let packet = unsafe { &mut *hid_transfer_packet };
 
     let status = match packet.reportId {
@@ -111,7 +113,7 @@ pub unsafe extern "C" fn evt_vhf_set_feature(
     _vhf_operation_context: PVOID,
     hid_transfer_packet: *mut HID_XFER_PACKET,
 ) {
-    let ctx = unsafe { &mut *(vhf_client_context as *mut DeviceContext) };
+    let ctx = vhf_client_context as *mut DeviceContext;
     let packet = unsafe { &*hid_transfer_packet };
 
     let status = match packet.reportId {
@@ -125,10 +127,10 @@ pub unsafe extern "C" fn evt_vhf_set_feature(
                     unsafe { &*(packet.reportBuffer as *const PtpInputModeReport) };
                 let mode = { report.mode }; // copy from packed field
                 if mode == PTP_COLLECTION_WINDOWS {
-                    ctx.ptp_input_on = true;
+                    unsafe { (*ctx).ptp_input_on.store(true, Ordering::Relaxed) };
                     println!("VHF SetFeature: PTP input mode ON");
                 } else {
-                    ctx.ptp_input_on = false;
+                    unsafe { (*ctx).ptp_input_on.store(false, Ordering::Relaxed) };
                     println!("VHF SetFeature: PTP input mode OFF (mode={mode})");
                 }
                 STATUS_SUCCESS
@@ -144,11 +146,14 @@ pub unsafe extern "C" fn evt_vhf_set_feature(
                 let report = unsafe {
                     &*(packet.reportBuffer as *const PtpSelectiveReportingReport)
                 };
-                ctx.ptp_report_button = report.button_report_on();
-                ctx.ptp_report_touch = report.surface_report_on();
+                let button = report.button_report_on();
+                let surface = report.surface_report_on();
+                unsafe {
+                    (*ctx).ptp_report_button.store(button, Ordering::Relaxed);
+                    (*ctx).ptp_report_touch.store(surface, Ordering::Relaxed);
+                }
                 println!(
-                    "VHF SelectiveReporting: button={}, surface={}",
-                    ctx.ptp_report_button, ctx.ptp_report_touch
+                    "VHF SelectiveReporting: button={button}, surface={surface}"
                 );
                 STATUS_SUCCESS
             }
@@ -178,8 +183,8 @@ pub unsafe extern "C" fn evt_vhf_set_feature(
 pub unsafe extern "C" fn evt_vhf_ready_for_next_read_report(
     vhf_client_context: PVOID,
 ) {
-    let ctx = unsafe { &mut *(vhf_client_context as *mut DeviceContext) };
-    ctx.vhf_ready = true;
+    let ctx = vhf_client_context as *mut DeviceContext;
+    unsafe { (*ctx).vhf_ready.store(true, Ordering::Relaxed) };
 }
 
 /// VHF cleanup callback.

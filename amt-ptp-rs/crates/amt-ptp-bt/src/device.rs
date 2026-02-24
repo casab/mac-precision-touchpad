@@ -9,6 +9,7 @@
 //! communicates with the underlying BT HID device.
 
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use wdk_sys::*;
 
@@ -44,15 +45,15 @@ pub struct DeviceContext {
     /// Pointer to the static device config (from `CONFIG_TABLE`).
     pub device_info: Option<&'static DeviceConfig>,
     /// Whether the VHF device is fully configured and operational.
-    pub device_configured: bool,
+    pub device_configured: AtomicBool,
 
     // ── PTP State ───────────────────────────────────────────────
     /// Whether PTP input reporting is enabled (mode = Windows PTP).
-    pub ptp_input_on: bool,
+    pub ptp_input_on: AtomicBool,
     /// Whether surface (touch) reporting is enabled.
-    pub ptp_report_touch: bool,
+    pub ptp_report_touch: AtomicBool,
     /// Whether button reporting is enabled.
-    pub ptp_report_button: bool,
+    pub ptp_report_button: AtomicBool,
 
     // ── Timing ──────────────────────────────────────────────────
     /// Performance counter frequency (ticks per second), for scan time conversion.
@@ -63,7 +64,7 @@ pub struct DeviceContext {
     // ── VHF Report Gating ──────────────────────────────────────
     /// Whether VHF is ready to accept the next input report.
     /// Set to `true` by `EvtVhfReadyForNextReadReport`, cleared after submission.
-    pub vhf_ready: bool,
+    pub vhf_ready: AtomicBool,
 
     // ── HID Transport ────────────────────────────────────────────
     /// I/O target to the underlying BT HID device.
@@ -74,8 +75,6 @@ pub struct DeviceContext {
     // ── Recovery ──────────────────────────────────────────────────
     /// Timer for multitouch configuration retry (fires after 2 seconds).
     pub recovery_timer: WDFTIMER,
-    /// Work item for deferred recovery operations.
-    pub recovery_work_item: WDFWORKITEM,
     /// Number of consecutive recovery attempts (reset on success).
     pub recovery_attempts: u32,
 }
@@ -98,17 +97,16 @@ impl DeviceContext {
         self.product_id = 0;
         self.version_number = 0;
         self.device_info = None;
-        self.device_configured = false;
-        self.ptp_input_on = false;
-        self.ptp_report_touch = true; // enabled by default
-        self.ptp_report_button = true; // enabled by default
+        self.device_configured = AtomicBool::new(false);
+        self.ptp_input_on = AtomicBool::new(false);
+        self.ptp_report_touch = AtomicBool::new(true); // enabled by default
+        self.ptp_report_button = AtomicBool::new(true); // enabled by default
         self.perf_freq = 0;
         self.last_report_time = 0;
-        self.vhf_ready = true;
+        self.vhf_ready = AtomicBool::new(true);
         self.hid_io_target = core::ptr::null_mut();
         self.hid_read_buffer_lookaside = core::ptr::null_mut();
         self.recovery_timer = core::ptr::null_mut();
-        self.recovery_work_item = core::ptr::null_mut();
         self.recovery_attempts = 0;
     }
 }

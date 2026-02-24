@@ -2,6 +2,8 @@
 //!
 //! Ported from `Device.c` (AmtPtpEvtDeviceD0Entry, AmtPtpEvtDeviceD0Exit).
 
+use core::sync::atomic::Ordering;
+
 use wdk::println;
 use wdk_sys::*;
 
@@ -20,11 +22,13 @@ pub unsafe extern "C" fn evt_device_d0_entry(
     device: WDFDEVICE,
     _previous_state: WDF_POWER_DEVICE_STATE,
 ) -> NTSTATUS {
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     // Enable Wellspring mode if reporting is requested
-    if ctx.ptp_report_button || ctx.ptp_report_touch {
-        let status = unsafe { set_wellspring_mode(ctx, true) };
+    if unsafe { (*ctx).ptp_report_button.load(Ordering::Relaxed) }
+        || unsafe { (*ctx).ptp_report_touch.load(Ordering::Relaxed) }
+    {
+        let status = unsafe { set_wellspring_mode(&mut *ctx, true) };
         if !NT_SUCCESS(status) {
             println!("D0Entry: SetWellspringMode(ON) failed: {status:#x}");
             return status;
@@ -36,18 +40,20 @@ pub unsafe extern "C" fn evt_device_d0_entry(
     // SAFETY: KeQueryPerformanceCounter is always safe to call.
     let mut freq: LARGE_INTEGER = unsafe { core::mem::zeroed() };
     let counter = unsafe { KeQueryPerformanceCounter(&mut freq) };
-    ctx.perf_freq = unsafe { *freq.QuadPart() };
-    ctx.last_report_time = unsafe { *counter.QuadPart() };
+    unsafe {
+        (*ctx).perf_freq = *freq.QuadPart();
+        (*ctx).last_report_time = *counter.QuadPart();
+    }
 
     // Start the continuous reader on the interrupt pipe
-    if ctx.interrupt_pipe.is_null() {
+    if unsafe { (*ctx).interrupt_pipe.is_null() } {
         println!("D0Entry: interrupt_pipe is null");
         return STATUS_DEVICE_NOT_READY;
     }
     let io_target = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfUsbTargetPipeGetIoTarget,
-            ctx.interrupt_pipe
+            (*ctx).interrupt_pipe
         )
     };
     let status = unsafe {
@@ -80,14 +86,14 @@ pub unsafe extern "C" fn evt_device_d0_exit(
     device: WDFDEVICE,
     _target_state: WDF_POWER_DEVICE_STATE,
 ) -> NTSTATUS {
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     // Stop the interrupt pipe I/O target
-    if !ctx.interrupt_pipe.is_null() {
+    if !unsafe { (*ctx).interrupt_pipe.is_null() } {
         let io_target = unsafe {
             call_unsafe_wdf_function_binding!(
                 WdfUsbTargetPipeGetIoTarget,
-                ctx.interrupt_pipe
+                (*ctx).interrupt_pipe
             )
         };
         unsafe {
@@ -100,7 +106,7 @@ pub unsafe extern "C" fn evt_device_d0_exit(
     }
 
     // Disable Wellspring mode
-    let status = unsafe { set_wellspring_mode(ctx, false) };
+    let status = unsafe { set_wellspring_mode(&mut *ctx, false) };
     if !NT_SUCCESS(status) {
         println!("D0Exit: SetWellspringMode(OFF) failed: {status:#x}");
         // Non-fatal — device is powering down anyway

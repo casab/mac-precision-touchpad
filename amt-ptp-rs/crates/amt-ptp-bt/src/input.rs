@@ -13,6 +13,8 @@
 //! Ported from `Input.c` (`PtpFilterInputRequestCompletionCallback`) in the
 //! C BT filter driver.
 
+use core::sync::atomic::Ordering;
+
 use wdk_sys::*;
 
 use crate::device::get_device_context;
@@ -47,7 +49,7 @@ pub unsafe extern "C" fn evt_bt_read_complete(
     context: WDFCONTEXT,
 ) {
     let device: WDFDEVICE = context.cast();
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     // Check request completion status
     let status = unsafe {
@@ -58,13 +60,13 @@ pub unsafe extern "C" fn evt_bt_read_complete(
         unsafe {
             call_unsafe_wdf_function_binding!(WdfObjectDelete, request.cast());
         }
-        if ctx.device_configured {
-            unsafe { recovery::start_recovery_timer(ctx) };
+        if unsafe { (*ctx).device_configured.load(Ordering::Relaxed) } {
+            unsafe { recovery::start_recovery_timer(&*ctx) };
         }
         return;
     }
 
-    let config = match ctx.device_info {
+    let config = match unsafe { (*ctx).device_info } {
         Some(c) => c,
         None => {
             unsafe {
@@ -80,11 +82,11 @@ pub unsafe extern "C" fn evt_bt_read_complete(
     } as usize;
 
     // Skip if no data or PTP input mode is not active
-    if bytes_returned == 0 || !ctx.ptp_input_on {
+    if bytes_returned == 0 || !unsafe { (*ctx).ptp_input_on.load(Ordering::Relaxed) } {
         unsafe {
             call_unsafe_wdf_function_binding!(WdfObjectDelete, request.cast());
         }
-        if ctx.device_configured {
+        if unsafe { (*ctx).device_configured.load(Ordering::Relaxed) } {
             let _ = unsafe { transport::issue_read_request(device) };
         }
         return;
@@ -103,7 +105,7 @@ pub unsafe extern "C" fn evt_bt_read_complete(
         unsafe {
             call_unsafe_wdf_function_binding!(WdfObjectDelete, request.cast());
         }
-        if ctx.device_configured {
+        if unsafe { (*ctx).device_configured.load(Ordering::Relaxed) } {
             let _ = unsafe { transport::issue_read_request(device) };
         }
         return;
@@ -121,7 +123,7 @@ pub unsafe extern "C" fn evt_bt_read_complete(
         unsafe {
             call_unsafe_wdf_function_binding!(WdfObjectDelete, request.cast());
         }
-        if ctx.device_configured {
+        if unsafe { (*ctx).device_configured.load(Ordering::Relaxed) } {
             let _ = unsafe { transport::issue_read_request(device) };
         }
         return;
@@ -152,8 +154,8 @@ pub unsafe extern "C" fn evt_bt_read_complete(
             unsafe {
                 call_unsafe_wdf_function_binding!(WdfObjectDelete, request.cast());
             }
-            if ctx.device_configured {
-                unsafe { recovery::start_recovery_timer(ctx) };
+            if unsafe { (*ctx).device_configured.load(Ordering::Relaxed) } {
+                unsafe { recovery::start_recovery_timer(&*ctx) };
             }
             return;
         }
@@ -166,25 +168,25 @@ pub unsafe extern "C" fn evt_bt_read_complete(
     // PTP scan time is in 100µs units.
     let perf_counter = unsafe { KeQueryPerformanceCounter(core::ptr::null_mut()) };
     let current_time = unsafe { *perf_counter.QuadPart() };
-    let delta_ticks = (current_time - ctx.last_report_time).max(0);
-    let delta = if ctx.perf_freq > 0 {
-        delta_ticks.saturating_mul(10_000) / ctx.perf_freq
+    let delta_ticks = (current_time - unsafe { (*ctx).last_report_time }).max(0);
+    let delta = if unsafe { (*ctx).perf_freq } > 0 {
+        delta_ticks.saturating_mul(10_000) / unsafe { (*ctx).perf_freq }
     } else {
         delta_ticks / 1000
     };
     let scan_time = if delta > 0xFFFF { 0xFFFF } else { delta as u16 };
-    ctx.last_report_time = current_time;
+    unsafe { (*ctx).last_report_time = current_time };
 
     // ── Build PTP report ─────────────────────────────────────────────
     let mut report = PtpReport::new();
     report.scan_time = scan_time;
     report.contact_count = count as u8;
 
-    if ctx.ptp_report_button && button {
+    if unsafe { (*ctx).ptp_report_button.load(Ordering::Relaxed) } && button {
         report.is_button_clicked = 1;
     }
 
-    if ctx.ptp_report_touch {
+    if unsafe { (*ctx).ptp_report_touch.load(Ordering::Relaxed) } {
         for i in 0..count {
             let f = &fingers[i];
             let (x, y) = f.transform_to_ptp(config);
@@ -199,7 +201,9 @@ pub unsafe extern "C" fn evt_bt_read_complete(
     }
 
     // ── Submit PTP report to VHF ─────────────────────────────────────
-    if !ctx.vhf_handle.is_null() && ctx.vhf_ready {
+    if !unsafe { (*ctx).vhf_handle.is_null() }
+        && unsafe { (*ctx).vhf_ready.load(Ordering::Relaxed) }
+    {
         let report_bytes = report.as_bytes();
         let mut xfer_packet = HID_XFER_PACKET {
             reportBuffer: report_bytes.as_ptr() as *mut u8,
@@ -208,14 +212,14 @@ pub unsafe extern "C" fn evt_bt_read_complete(
         };
 
         // Mark not ready until VHF signals via EvtVhfReadyForNextReadReport
-        ctx.vhf_ready = false;
+        unsafe { (*ctx).vhf_ready.store(false, Ordering::Relaxed) };
 
         let status = unsafe {
-            vhf_device::vhf_submit_read_report(ctx.vhf_handle, &mut xfer_packet)
+            vhf_device::vhf_submit_read_report((*ctx).vhf_handle, &mut xfer_packet)
         };
         if !NT_SUCCESS(status) {
             // If submission failed, re-mark as ready to avoid stalling
-            ctx.vhf_ready = true;
+            unsafe { (*ctx).vhf_ready.store(true, Ordering::Relaxed) };
         }
     }
 
@@ -225,7 +229,7 @@ pub unsafe extern "C" fn evt_bt_read_complete(
     }
 
     // Issue next read request to keep the data flowing
-    if ctx.device_configured {
+    if unsafe { (*ctx).device_configured.load(Ordering::Relaxed) } {
         let _ = unsafe { transport::issue_read_request(device) };
     }
 }

@@ -5,6 +5,8 @@
 //!
 //! Ported from `Hid.c` in the C driver.
 
+use core::sync::atomic::Ordering;
+
 use wdk::println;
 use wdk_sys::*;
 
@@ -65,8 +67,8 @@ struct HidXferPacket {
 ///
 /// Request must be valid with a sufficiently large output buffer.
 pub unsafe fn get_hid_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
-    let ctx = unsafe { &*get_device_context(device) };
-    let config = match ctx.device_info {
+    let ctx = get_device_context(device);
+    let config = match unsafe { (*ctx).device_info } {
         Some(c) => c,
         None => return STATUS_DEVICE_NOT_READY,
     };
@@ -134,7 +136,7 @@ pub unsafe fn get_hid_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> NTST
 ///
 /// Request must be valid with a sufficiently large output buffer.
 pub unsafe fn get_device_attributes(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
-    let ctx = unsafe { &*get_device_context(device) };
+    let ctx = get_device_context(device);
 
     let mut buffer: *mut core::ffi::c_void = core::ptr::null_mut();
     let mut buffer_len: usize = 0;
@@ -154,8 +156,8 @@ pub unsafe fn get_device_attributes(device: WDFDEVICE, request: WDFREQUEST) -> N
 
     let attrs = unsafe { &mut *(buffer as *mut HidDeviceAttributes) };
     attrs.size = HID_DEVICE_ATTRIBUTES_SIZE as ULONG;
-    attrs.vendor_id = ctx.device_descriptor.idVendor;
-    attrs.product_id = ctx.device_descriptor.idProduct;
+    attrs.vendor_id = unsafe { (*ctx).device_descriptor.idVendor };
+    attrs.product_id = unsafe { (*ctx).device_descriptor.idProduct };
     attrs.version_number = DEVICE_VERSION as u16;
     attrs.reserved = [0u16; 11];
 
@@ -179,8 +181,8 @@ pub unsafe fn get_device_attributes(device: WDFDEVICE, request: WDFREQUEST) -> N
 ///
 /// Request must be valid with a sufficiently large output buffer.
 pub unsafe fn get_report_descriptor(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
-    let ctx = unsafe { &*get_device_context(device) };
-    let config = match ctx.device_info {
+    let ctx = get_device_context(device);
+    let config = match unsafe { (*ctx).device_info } {
         Some(c) => c,
         None => return STATUS_DEVICE_NOT_READY,
     };
@@ -324,7 +326,7 @@ pub unsafe fn get_feature(_device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
 ///
 /// Request IRP `UserBuffer` must contain a valid `HID_XFER_PACKET`.
 pub unsafe fn set_feature(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     let irp = unsafe {
         call_unsafe_wdf_function_binding!(WdfRequestWdmGetIrp, request)
@@ -348,14 +350,14 @@ pub unsafe fn set_feature(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
             let report = unsafe { &*(packet.report_buffer as *const PtpInputModeReport) };
             let mode = { report.mode }; // copy from packed field
             if mode == PTP_COLLECTION_WINDOWS {
-                let status = unsafe { set_wellspring_mode(ctx, true) };
+                let status = unsafe { set_wellspring_mode(&mut *ctx, true) };
                 if !NT_SUCCESS(status) {
                     println!("SetFeature: Wellspring enable failed: {status:#x}");
                     return status;
                 }
-                ctx.ptp_input_on = true;
+                unsafe { (*ctx).ptp_input_on.store(true, Ordering::Relaxed) };
             } else {
-                ctx.ptp_input_on = false;
+                unsafe { (*ctx).ptp_input_on.store(false, Ordering::Relaxed) };
             }
             STATUS_SUCCESS
         }
@@ -369,11 +371,14 @@ pub unsafe fn set_feature(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
 
             let report =
                 unsafe { &*(packet.report_buffer as *const PtpSelectiveReportingReport) };
-            ctx.ptp_report_button = report.button_report_on();
-            ctx.ptp_report_touch = report.surface_report_on();
+            let button = report.button_report_on();
+            let surface = report.surface_report_on();
+            unsafe {
+                (*ctx).ptp_report_button.store(button, Ordering::Relaxed);
+                (*ctx).ptp_report_touch.store(surface, Ordering::Relaxed);
+            }
             println!(
-                "SelectiveReporting: button={}, surface={}",
-                ctx.ptp_report_button, ctx.ptp_report_touch
+                "SelectiveReporting: button={button}, surface={surface}"
             );
             STATUS_SUCCESS
         }

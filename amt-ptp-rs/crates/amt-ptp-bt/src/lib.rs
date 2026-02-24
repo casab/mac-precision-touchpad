@@ -172,21 +172,22 @@ unsafe extern "C" fn evt_driver_device_add(
     }
 
     // Initialize device context with safe defaults
-    let ctx = unsafe { &mut *get_device_context(wdf_device) };
-    unsafe { ctx.init_defaults() };
+    let ctx = get_device_context(wdf_device);
+    unsafe { (*ctx).init_defaults() };
 
     // Store handles needed by other callbacks
-    ctx.device = wdf_device;
+    unsafe { (*ctx).device = wdf_device };
 
     // Get the WDM device object for VHF_CONFIG.DeviceObject.
     // SAFETY: WdfDeviceWdmGetDeviceObject returns the underlying WDM device
     // object for a valid WDFDEVICE handle.
-    ctx.wdm_device_object = unsafe {
-        call_unsafe_wdf_function_binding!(WdfDeviceWdmGetDeviceObject, wdf_device)
+    unsafe {
+        (*ctx).wdm_device_object =
+            call_unsafe_wdf_function_binding!(WdfDeviceWdmGetDeviceObject, wdf_device)
+                .cast();
     }
-    .cast();
 
-    if ctx.wdm_device_object.is_null() {
+    if unsafe { (*ctx).wdm_device_object.is_null() } {
         println!("WdfDeviceWdmGetDeviceObject returned NULL");
         return STATUS_UNSUCCESSFUL;
     }

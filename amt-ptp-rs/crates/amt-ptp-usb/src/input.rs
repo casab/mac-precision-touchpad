@@ -6,6 +6,8 @@
 //!
 //! Ported from `Interrupt.c` (`AmtPtpEvtUsbInterruptPipeReadComplete`) in the C driver.
 
+use core::sync::atomic::Ordering;
+
 use wdk_sys::*;
 
 use crate::device::get_device_context;
@@ -35,15 +37,15 @@ pub unsafe extern "C" fn evt_usb_interrupt_pipe_read_complete(
     context: WDFCONTEXT,
 ) {
     let device: WDFDEVICE = context.cast();
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
-    let config = match ctx.device_info {
+    let config = match unsafe { (*ctx).device_info } {
         Some(c) => c,
         None => return,
     };
 
     // Skip if PTP input mode is not active
-    if !ctx.ptp_input_on {
+    if !unsafe { (*ctx).ptp_input_on.load(Ordering::Relaxed) } {
         return;
     }
 
@@ -91,26 +93,26 @@ pub unsafe extern "C" fn evt_usb_interrupt_pipe_read_complete(
     // where 10_000 = 1_000_000µs / 100µs (conversions per second of 100µs slots).
     let perf_counter = unsafe { KeQueryPerformanceCounter(core::ptr::null_mut()) };
     let current_time = unsafe { *perf_counter.QuadPart() };
-    let delta_ticks = (current_time - ctx.last_report_time).max(0);
-    let delta = if ctx.perf_freq > 0 {
-        delta_ticks.saturating_mul(10_000) / ctx.perf_freq
+    let delta_ticks = (current_time - unsafe { (*ctx).last_report_time }).max(0);
+    let delta = if unsafe { (*ctx).perf_freq } > 0 {
+        delta_ticks.saturating_mul(10_000) / unsafe { (*ctx).perf_freq }
     } else {
         // Fallback: assume ~10MHz QPC (common on Windows 10+)
         delta_ticks / 1000
     };
     let scan_time = if delta > 0xFFFF { 0xFFFF } else { delta as u16 };
-    ctx.last_report_time = current_time;
+    unsafe { (*ctx).last_report_time = current_time };
 
     // ── Build PTP report ─────────────────────────────────────────────
     let mut report = PtpReport::new();
     report.scan_time = scan_time;
     report.contact_count = count as u8;
 
-    if ctx.ptp_report_button && button {
+    if unsafe { (*ctx).ptp_report_button.load(Ordering::Relaxed) } && button {
         report.is_button_clicked = 1;
     }
 
-    if ctx.ptp_report_touch {
+    if unsafe { (*ctx).ptp_report_touch.load(Ordering::Relaxed) } {
         for i in 0..count {
             let f = &fingers[i];
             let (x, y) = f.transform_to_ptp(config);
@@ -129,7 +131,7 @@ pub unsafe extern "C" fn evt_usb_interrupt_pipe_read_complete(
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfIoQueueRetrieveNextRequest,
-            ctx.input_queue,
+            (*ctx).input_queue,
             &mut request
         )
     };

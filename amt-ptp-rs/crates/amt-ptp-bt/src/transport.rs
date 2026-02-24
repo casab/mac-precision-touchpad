@@ -32,13 +32,14 @@ const BT_POOL_TAG: u32 = u32::from_le_bytes(*b"apbt");
 ///
 /// Device must be a valid WDFDEVICE with an initialized DeviceContext.
 pub unsafe fn init_transport(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = unsafe { &mut *get_device_context(device) };
+    let ctx = get_device_context(device);
 
     // Get the default I/O target (lower device in filter stack)
-    ctx.hid_io_target = unsafe {
-        call_unsafe_wdf_function_binding!(WdfDeviceGetIoTarget, device)
-    };
-    if ctx.hid_io_target.is_null() {
+    unsafe {
+        (*ctx).hid_io_target =
+            call_unsafe_wdf_function_binding!(WdfDeviceGetIoTarget, device);
+    }
+    if unsafe { (*ctx).hid_io_target.is_null() } {
         println!("transport: WdfDeviceGetIoTarget returned NULL");
         return STATUS_UNSUCCESSFUL;
     }
@@ -52,7 +53,7 @@ pub unsafe fn init_transport(device: WDFDEVICE) -> NTSTATUS {
             POOL_TYPE::NonPagedPoolNx as u32,
             WDF_NO_OBJECT_ATTRIBUTES,
             BT_POOL_TAG,
-            &mut ctx.hid_read_buffer_lookaside
+            &mut (*ctx).hid_read_buffer_lookaside
         )
     };
     if !NT_SUCCESS(status) {
@@ -136,15 +137,6 @@ pub unsafe fn query_device_attributes(ctx: &mut DeviceContext) -> NTSTATUS {
 ///
 /// I/O target must be initialized and device must be a Magic Trackpad 2.
 pub unsafe fn activate_multitouch(ctx: &mut DeviceContext) -> NTSTATUS {
-    // Build HID_XFER_PACKET for SET_FEATURE
-    // The packet layout: HID_XFER_PACKET header followed by report data
-    #[repr(C)]
-    struct SetFeaturePacket {
-        report_buffer: *mut u8,
-        report_buffer_len: u32,
-        report_id: u8,
-    }
-
     // Report data: [0xF1, 0x02, 0x01]
     let mut report_data: [u8; 3] = [0xF1, 0x02, 0x01];
 
@@ -275,9 +267,11 @@ pub unsafe fn activate_multitouch(ctx: &mut DeviceContext) -> NTSTATUS {
 ///
 /// I/O target and lookaside list must be initialized. Device must be configured.
 pub unsafe fn issue_read_request(device: WDFDEVICE) -> NTSTATUS {
-    let ctx = unsafe { &*get_device_context(device) };
+    let ctx = get_device_context(device);
 
-    if !ctx.device_configured || ctx.hid_io_target.is_null() {
+    if !unsafe { (*ctx).device_configured.load(core::sync::atomic::Ordering::Relaxed) }
+        || unsafe { (*ctx).hid_io_target.is_null() }
+    {
         return STATUS_DEVICE_NOT_READY;
     }
 
@@ -291,7 +285,7 @@ pub unsafe fn issue_read_request(device: WDFDEVICE) -> NTSTATUS {
         call_unsafe_wdf_function_binding!(
             WdfRequestCreate,
             &mut attrs,
-            ctx.hid_io_target,
+            (*ctx).hid_io_target,
             &mut request
         )
     };
@@ -305,7 +299,7 @@ pub unsafe fn issue_read_request(device: WDFDEVICE) -> NTSTATUS {
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfMemoryCreateFromLookaside,
-            ctx.hid_read_buffer_lookaside,
+            (*ctx).hid_read_buffer_lookaside,
             &mut output_mem
         )
     };
@@ -321,7 +315,7 @@ pub unsafe fn issue_read_request(device: WDFDEVICE) -> NTSTATUS {
     let status = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfIoTargetFormatRequestForInternalIoctl,
-            ctx.hid_io_target,
+            (*ctx).hid_io_target,
             request,
             IOCTL_HID_READ_REPORT,
             core::ptr::null_mut(), // InputBuffer (none for read)
@@ -353,7 +347,7 @@ pub unsafe fn issue_read_request(device: WDFDEVICE) -> NTSTATUS {
         call_unsafe_wdf_function_binding!(
             WdfRequestSend,
             request,
-            ctx.hid_io_target,
+            (*ctx).hid_io_target,
             core::ptr::null_mut() // NULL = default (async)
         )
     };
