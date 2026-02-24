@@ -348,12 +348,12 @@ pub unsafe fn set_feature(device: WDFDEVICE, request: WDFREQUEST) -> NTSTATUS {
             let report = unsafe { &*(packet.report_buffer as *const PtpInputModeReport) };
             let mode = { report.mode }; // copy from packed field
             if mode == PTP_COLLECTION_WINDOWS {
-                ctx.ptp_input_on = true;
                 let status = unsafe { set_wellspring_mode(ctx, true) };
                 if !NT_SUCCESS(status) {
                     println!("SetFeature: Wellspring enable failed: {status:#x}");
                     return status;
                 }
+                ctx.ptp_input_on = true;
             } else {
                 ctx.ptp_input_on = false;
             }

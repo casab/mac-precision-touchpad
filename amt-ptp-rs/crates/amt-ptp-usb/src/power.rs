@@ -40,6 +40,10 @@ pub unsafe extern "C" fn evt_device_d0_entry(
     ctx.last_report_time = unsafe { *counter.QuadPart() };
 
     // Start the continuous reader on the interrupt pipe
+    if ctx.interrupt_pipe.is_null() {
+        println!("D0Entry: interrupt_pipe is null");
+        return STATUS_DEVICE_NOT_READY;
+    }
     let io_target = unsafe {
         call_unsafe_wdf_function_binding!(
             WdfUsbTargetPipeGetIoTarget,
