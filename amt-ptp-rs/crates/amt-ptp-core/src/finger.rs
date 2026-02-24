@@ -351,6 +351,196 @@ mod tests {
         assert_eq!(y, 0);
     }
 
+    // ── parse_report error path tests ────────────────────────────────
+
+    #[test]
+    fn parse_report_buffer_too_short() {
+        use crate::constants::PTP_MAX_CONTACT_POINTS;
+        let config = lookup_config(PID_MAGIC_TRACKPAD2);
+        let header = config.trackpad_type.header_size_usb(); // 12
+
+        // Report shorter than header
+        let report = [0u8; 5];
+        let mut fingers = [Finger {
+            raw_x: 0, raw_y: 0, touch_major: 0, touch_minor: 0,
+            size: 0, pressure: 0, contact_id: 0, orientation: 0,
+        }; PTP_MAX_CONTACT_POINTS];
+
+        let result = parse_report(&report, config, header, &mut fingers);
+        assert!(matches!(result, Err(crate::error::Error::BufferTooShort { .. })));
+    }
+
+    #[test]
+    fn parse_report_malformed_payload() {
+        use crate::constants::PTP_MAX_CONTACT_POINTS;
+        let config = lookup_config(PID_MAGIC_TRACKPAD2);
+        let header = config.trackpad_type.header_size_usb(); // 12
+        // finger_size = 9, delta = 0. Payload of 10 bytes → 10 % 9 = 1 → malformed
+        let report = [0u8; 22]; // 12 header + 10 payload
+        let mut fingers = [Finger {
+            raw_x: 0, raw_y: 0, touch_major: 0, touch_minor: 0,
+            size: 0, pressure: 0, contact_id: 0, orientation: 0,
+        }; PTP_MAX_CONTACT_POINTS];
+
+        let result = parse_report(&report, config, header, &mut fingers);
+        assert!(matches!(result, Err(crate::error::Error::MalformedPayload { .. })));
+    }
+
+    #[test]
+    fn parse_report_zero_fingers() {
+        // Header-only report = 0 fingers (all fingers lifted)
+        use crate::constants::PTP_MAX_CONTACT_POINTS;
+        let config = lookup_config(PID_MAGIC_TRACKPAD2);
+        let header = config.trackpad_type.header_size_usb(); // 12
+
+        let report = [0u8; 12]; // exactly header, no finger data
+        let mut fingers = [Finger {
+            raw_x: 0, raw_y: 0, touch_major: 0, touch_minor: 0,
+            size: 0, pressure: 0, contact_id: 0, orientation: 0,
+        }; PTP_MAX_CONTACT_POINTS];
+
+        let (count, button) = parse_report(&report, config, header, &mut fingers).unwrap();
+        assert_eq!(count, 0);
+        assert!(!button);
+    }
+
+    #[test]
+    fn parse_report_clamps_to_max_contacts() {
+        // TYPE5: 9 fingers in report but output buffer is PTP_MAX_CONTACT_POINTS (5)
+        use crate::constants::PTP_MAX_CONTACT_POINTS;
+        let config = lookup_config(PID_MAGIC_TRACKPAD2);
+        let header = config.trackpad_type.header_size_usb(); // 12
+
+        // 12 + 9*9 = 93 bytes (9 fingers)
+        let mut report = [0u8; 93];
+        // Give each finger a distinct contact ID so we can verify parse order
+        for i in 0..9 {
+            let offset = header + i * 9;
+            report[offset + 8] = i as u8; // contact_id in low nibble of byte 8
+        }
+
+        let mut fingers = [Finger {
+            raw_x: 0, raw_y: 0, touch_major: 0, touch_minor: 0,
+            size: 0, pressure: 0, contact_id: 0, orientation: 0,
+        }; PTP_MAX_CONTACT_POINTS];
+
+        let (count, _) = parse_report(&report, config, header, &mut fingers).unwrap();
+        assert_eq!(count, PTP_MAX_CONTACT_POINTS); // clamped from 9 to 5
+        // Verify first 5 fingers were parsed in order
+        for i in 0..5 {
+            assert_eq!(fingers[i].contact_id, i as u8);
+        }
+    }
+
+    #[test]
+    fn parse_report_bt_header_type5() {
+        // BT header for TYPE5 is 4 bytes (vs USB 12 bytes)
+        use crate::constants::PTP_MAX_CONTACT_POINTS;
+        let config = lookup_config(PID_MAGIC_TRACKPAD2);
+        let bt_header = config.trackpad_type.header_size_bt(); // 4
+        assert_eq!(bt_header, 4);
+
+        // 4 + 2*9 = 22 bytes (2 fingers via BT)
+        let mut report = [0u8; 22];
+        // Set button byte (offset 1 for TYPE5)
+        report[crate::constants::BUTTON_TYPE5] = 0x01;
+        // Set finger 0 contact ID = 7
+        report[4 + 8] = 0x07;
+        // Set finger 1 contact ID = 3
+        report[4 + 9 + 8] = 0x03;
+
+        let mut fingers = [Finger {
+            raw_x: 0, raw_y: 0, touch_major: 0, touch_minor: 0,
+            size: 0, pressure: 0, contact_id: 0, orientation: 0,
+        }; PTP_MAX_CONTACT_POINTS];
+
+        let (count, button) = parse_report(&report, config, bt_header, &mut fingers).unwrap();
+        assert_eq!(count, 2);
+        assert!(button);
+        assert_eq!(fingers[0].contact_id, 7);
+        assert_eq!(fingers[1].contact_id, 3);
+    }
+
+    // ── TYPE5 Y coordinate extraction ──────────────────────────────────
+
+    #[test]
+    fn type5_coordinate_extraction_positive_y() {
+        // Y is extracted from bits 13-25 of bytes 0-3, then negated.
+        // To get positive Y output, we need a negative raw value in bits 13-25.
+        // Set only byte 2 to 0x80 → raw_u32 bits 16-23 = 0x80 = 10000000.
+        // After (raw_u32 << 6) as i32 >> 19, the Y component comes from those bits.
+        // Use known values: bytes 0-1 = 0 (X=0), bytes 2-3 encode Y.
+        // raw_u32 = 0x0000_XX00 where XX encodes Y bits.
+        // Let's set a known Y: encode raw bits 13-25 as value 100.
+        // 100 in bits 13-25: 100 << 13 = 0x000C_8000
+        // raw_u32 = 0x000C_8000 → y = -(0x000C_8000 << 6) as i32 >> 19)
+        //                          = -(0x0320_0000 as i32 >> 19)
+        //                          = -(0x0000_0064) = -100
+        let raw_u32: u32 = 100 << 13;
+        let bytes = raw_u32.to_le_bytes();
+        let mut data = [0u8; 9];
+        data[0] = bytes[0];
+        data[1] = bytes[1];
+        data[2] = bytes[2];
+        data[3] = bytes[3];
+        let f = parse_type5_finger(&data);
+        assert_eq!(f.raw_y, -100); // negated
+    }
+
+    // ── is_confident boundary ──────────────────────────────────────────
+
+    #[test]
+    fn is_confident_at_boundary() {
+        // Threshold: (touch_minor << 1) < 345
+        // touch_minor = 172 → 172 << 1 = 344 < 345 → confident
+        let confident = Finger {
+            raw_x: 0, raw_y: 0, touch_major: 10, touch_minor: 172,
+            size: 0, pressure: 50, contact_id: 0, orientation: 0,
+        };
+        assert!(confident.is_confident());
+
+        // touch_minor = 173 → 173 << 1 = 346 >= 345 → NOT confident
+        let not_confident = Finger {
+            raw_x: 0, raw_y: 0, touch_major: 10, touch_minor: 173,
+            size: 0, pressure: 50, contact_id: 0, orientation: 0,
+        };
+        assert!(!not_confident.is_confident());
+    }
+
+    // ── parse_legacy_finger ────────────────────────────────────────────
+
+    #[test]
+    fn parse_legacy_finger_basic() {
+        use crate::constants::PID_T2_7A;
+        let config = lookup_config(PID_T2_7A);
+
+        // TYPE4 finger block = 30 bytes, all le16 fields.
+        // abs_x at bytes 2-3, abs_y at bytes 4-5
+        // touch_major at bytes 16-17, touch_minor at bytes 18-19
+        // pressure at bytes 24-25
+        let mut data = [0u8; 30];
+        // abs_x = 1000
+        data[2..4].copy_from_slice(&1000u16.to_le_bytes());
+        // abs_y = 2000
+        data[4..6].copy_from_slice(&2000u16.to_le_bytes());
+        // touch_major = 100
+        data[16..18].copy_from_slice(&100u16.to_le_bytes());
+        // touch_minor = 80
+        data[18..20].copy_from_slice(&80u16.to_le_bytes());
+        // pressure = 200
+        data[24..26].copy_from_slice(&200u16.to_le_bytes());
+
+        let f = parse_legacy_finger(&data, config);
+        assert_eq!(f.raw_x, 1000);
+        // Y is inverted: config.y.max - abs_y
+        assert_eq!(f.raw_y, config.y.max - 2000);
+        assert_eq!(f.touch_major, 50);  // 100 >> 1
+        assert_eq!(f.touch_minor, 40);  // 80 >> 1
+        assert_eq!(f.pressure, 100);    // 200 >> 1
+    }
+
+    // ── parse_report regression tests (delta fix) ─────────────────────
+
     #[test]
     fn type4_parse_report_with_delta() {
         // TYPE4: header=46, delta=2, finger_size=30

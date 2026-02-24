@@ -285,4 +285,46 @@ mod tests {
     fn umapp_conf_report_size() {
         assert_eq!(mem::size_of::<PtpUserModeAppConfReport>(), 4);
     }
+
+    #[test]
+    fn ptp_report_byte_layout() {
+        // Verify exact byte positions match what the HID report descriptor declares:
+        // Byte  0:     report_id (0x05)
+        // Bytes 1-45:  5 × PtpContact (9 bytes each)
+        // Bytes 46-47: scan_time (u16 LE)
+        // Byte  48:    contact_count
+        // Byte  49:    is_button_clicked
+        let mut report = PtpReport::new();
+        report.scan_time = 0x1234;
+        report.contact_count = 3;
+        report.is_button_clicked = 1;
+        report.contacts[0] = PtpContact::new(42, 100, 200, true, false);
+        report.contacts[4] = PtpContact::new(99, 300, 400, false, true);
+
+        let bytes = report.as_bytes();
+
+        // Report ID
+        assert_eq!(bytes[0], REPORTID_MULTITOUCH);
+
+        // Contact 0 at offset 1: flags=0x01 (confidence only), id=42, x=100, y=200
+        assert_eq!(bytes[1], 0x01); // confidence=1, tip=0
+        assert_eq!(u32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]), 42);
+        assert_eq!(u16::from_le_bytes([bytes[6], bytes[7]]), 100);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 200);
+
+        // Contact 4 at offset 1 + 4*9 = 37: flags=0x02 (tip only), id=99, x=300, y=400
+        assert_eq!(bytes[37], 0x02); // confidence=0, tip=1
+        assert_eq!(u32::from_le_bytes([bytes[38], bytes[39], bytes[40], bytes[41]]), 99);
+        assert_eq!(u16::from_le_bytes([bytes[42], bytes[43]]), 300);
+        assert_eq!(u16::from_le_bytes([bytes[44], bytes[45]]), 400);
+
+        // Scan time at offset 46
+        assert_eq!(u16::from_le_bytes([bytes[46], bytes[47]]), 0x1234);
+
+        // Contact count at offset 48
+        assert_eq!(bytes[48], 3);
+
+        // Button at offset 49
+        assert_eq!(bytes[49], 1);
+    }
 }
