@@ -171,9 +171,10 @@ unsafe fn select_interrupt_interface(device: WDFDEVICE) -> NTSTATUS {
 /// Interrupt pipe must be selected and stored in the device context.
 unsafe fn configure_continuous_reader(device: WDFDEVICE) -> NTSTATUS {
     let ctx = unsafe { &*get_device_context(device) };
-    let config = ctx
-        .device_info
-        .expect("device_info must be set before configuring continuous reader");
+    let config = match ctx.device_info {
+        Some(c) => c,
+        None => return STATUS_DEVICE_NOT_READY,
+    };
 
     let transfer_length = config.trackpad_type.usb_report_size();
     if transfer_length == 0 {
@@ -292,9 +293,14 @@ pub unsafe fn set_wellspring_mode(ctx: &mut DeviceContext, enable: bool) -> NTST
     let buf_slice =
         unsafe { core::slice::from_raw_parts_mut(buffer.cast::<u8>(), buf_size) };
     let switch_idx = msg.switch_idx as usize;
-    if switch_idx < buf_size {
-        buf_slice[switch_idx] = if enable { msg.switch_on } else { msg.switch_off };
+    if switch_idx >= buf_size {
+        println!("SetWellspringMode: switch_idx {switch_idx} >= buf_size {buf_size}");
+        unsafe {
+            call_unsafe_wdf_function_binding!(WdfObjectDelete, buf_handle.cast());
+        }
+        return STATUS_INVALID_PARAMETER;
     }
+    buf_slice[switch_idx] = if enable { msg.switch_on } else { msg.switch_off };
 
     // 3. WRITE modified mode
     setup_packet.Packet.bm.Bytes.Request = WELLSPRING_MODE_WRITE_REQUEST_ID;
