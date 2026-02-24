@@ -206,11 +206,11 @@ pub fn parse_report(
     let count = raw_count.min(out.len());
 
     // Parse fingers
-    for i in 0..count {
+    for (i, contact) in out.iter_mut().enumerate().take(count) {
         let offset = header_size + delta + i * finger_size;
         let finger_data = &report[offset..offset + finger_size];
 
-        out[i] = match config.trackpad_type {
+        *contact = match config.trackpad_type {
             crate::device::TrackpadType::Type5 => {
                 let block: &[u8; 9] = finger_data.try_into().unwrap_or(&[0u8; 9]);
                 parse_type5_finger(block)

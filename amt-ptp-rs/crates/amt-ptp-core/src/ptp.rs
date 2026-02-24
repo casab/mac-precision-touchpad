@@ -80,6 +80,12 @@ pub struct PtpReport {
     pub is_button_clicked: u8,
 }
 
+impl Default for PtpReport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PtpReport {
     /// Create a new empty PTP report with the correct report ID.
     #[must_use]
@@ -94,8 +100,6 @@ impl PtpReport {
     }
 
     /// Get this report as a raw byte slice for submission to HID.
-    ///
-    /// # Safety
     ///
     /// The returned slice borrows `self`. The struct is `repr(C, packed)`,
     /// so this is a valid reinterpretation.
